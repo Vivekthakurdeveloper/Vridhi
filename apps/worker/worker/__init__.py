@@ -1,0 +1,1 @@
+"""Vridhi ingest worker."""

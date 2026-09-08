@@ -1,0 +1,139 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vridhi
+      POSTGRES_PASSWORD: vridhi
+      POSTGRES_DB: vridhi
+    ports:
+      - "5432:5432"
+    volumes:
+      - vridhi_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vridhi -d vridhi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:3.7
+    environment:
+      SERVICES: s3,sqs
+      DEFAULT_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      S3_BUCKET: vridhi-documents
+      SQS_QUEUE_NAME: vridhi-ingest
+      SQS_DLQ_NAME: vridhi-ingest-dlq
+      SQS_MAX_RECEIVE_COUNT: "5"
+    ports:
+      - "4566:4566"
+    volumes:
+      - vridhi_localstack:/var/lib/localstack
+      - ./infra/localstack/init-aws.sh:/etc/localstack/init/ready.d/01-init-aws.sh
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  opensearch:
+    image: opensearchproject/opensearch:2.11.1
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+    ports:
+      - "9200:9200"
+    volumes:
+      - vridhi_opensearch:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://vridhi:vridhi@postgres:5432/vridhi
+      APP_URL: http://localhost:8000
+      FRONTEND_URL: http://localhost:8443
+      PORT: "8000"
+      S3_ENDPOINT_URL: http://localstack:4566
+      SQS_ENDPOINT_URL: http://localstack:4566
+      OPENSEARCH_URL: http://opensearch:9200
+      STORAGE_BACKEND: s3
+      QUEUE_BACKEND: sqs
+      SEARCH_BACKEND: opensearch
+      FILE_UPLOAD_ENABLED: "true"
+      GOOGLE_DRIVE_ENABLED: "true"
+      GOOGLE_DRIVE_MODE: mock
+      TOKEN_BACKEND: fernet
+      AI_QUERY_ENABLED: "true"
+      SEARCH_ENABLED: "true"
+      LLM_PROVIDER: extractive
+      EMBEDDING_PROVIDER: hash
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    volumes:
+      - ./apps/api:/app
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://vridhi:vridhi@postgres:5432/vridhi
+      S3_ENDPOINT_URL: http://localstack:4566
+      SQS_ENDPOINT_URL: http://localstack:4566
+      OPENSEARCH_URL: http://opensearch:9200
+      STORAGE_BACKEND: s3
+      QUEUE_BACKEND: sqs
+      SEARCH_BACKEND: opensearch
+      GOOGLE_DRIVE_ENABLED: "true"
+      GOOGLE_DRIVE_MODE: mock
+      TOKEN_BACKEND: fernet
+      AI_QUERY_ENABLED: "true"
+      SEARCH_ENABLED: "true"
+      EMBEDDING_PROVIDER: hash
+      PYTHONPATH: /api:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/api
+      - ./apps/worker:/app
+
+volumes:
+  vridhi_pg:
+  vridhi_localstack:
+  vridhi_opensearch:

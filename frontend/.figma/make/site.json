@@ -1,0 +1,11 @@
+{
+  "description": "AI Business Knowledge Assistant",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  },
+  "title": "Vridhi.ai"
+}
