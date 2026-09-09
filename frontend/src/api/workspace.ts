@@ -111,6 +111,18 @@ export const documentsApi = {
     }
     return apiUpload<UploadResult>("/v1/documents/upload", form)
   },
+  patchVisibility(id: string, visibility: "private" | "org" | "selected", selectedUserIds: string[] = []) {
+    return apiRequest<DocumentItem>(`/v1/documents/${id}`, {
+      method: "PATCH",
+      body: { visibility, selected_user_ids: selectedUserIds },
+    })
+  },
+  retry(id: string) {
+    return apiRequest<SyncJob>(`/v1/documents/${id}/retry`, { method: "POST" })
+  },
+  status(id: string) {
+    return apiRequest<DocumentItem>(`/v1/documents/${id}/status`)
+  },
 }
 
 export const jobsApi = {

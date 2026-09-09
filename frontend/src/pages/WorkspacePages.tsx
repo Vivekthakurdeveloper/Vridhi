@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/auth/AuthContext"
 import { ApiError, userFacingError } from "@/api/client"
-import { featuresApi } from "@/api/auth"
+import { authApi, featuresApi } from "@/api/auth"
 import {
   auditApi,
   connectorsApi,
@@ -133,6 +133,24 @@ export function KnowledgePage() {
     }
   }
 
+  async function onVisibility(id: string, next: "private" | "org" | "selected") {
+    try {
+      await documentsApi.patchVisibility(id, next)
+      await load()
+    } catch (err) {
+      setUploadError(userFacingError(err))
+    }
+  }
+
+  async function onRetry(id: string) {
+    try {
+      await documentsApi.retry(id)
+      await load()
+    } catch (err) {
+      setUploadError(userFacingError(err))
+    }
+  }
+
   async function onPreview(id: string) {
     try {
       setPreview(await documentsApi.preview(id))
@@ -253,7 +271,26 @@ export function KnowledgePage() {
               </div>
               <div className="row-actions">
                 <time>{formatDateTime(doc.updated_at)}</time>
+                <select
+                  aria-label={`Visibility for ${doc.title}`}
+                  value={doc.visibility === "selected" ? "selected" : doc.visibility}
+                  onChange={(e) => {
+                    const next = e.target.value as "private" | "org"
+                    void onVisibility(doc.id, next)
+                  }}
+                >
+                  <option value="private">Private</option>
+                  <option value="org">Organization</option>
+                  {doc.visibility === "selected" ? (
+                    <option value="selected" disabled>
+                      Selected users
+                    </option>
+                  ) : null}
+                </select>
                 <button type="button" className="text-button" onClick={() => void onPreview(doc.id)}>Preview</button>
+                {doc.status === "failed" ? (
+                  <button type="button" className="text-button" onClick={() => void onRetry(doc.id)}>Retry</button>
+                ) : null}
                 <button type="button" className="text-button" onClick={() => void onDelete(doc.id)}>Delete</button>
               </div>
             </div>
@@ -891,7 +928,22 @@ export function AuditPage() {
 }
 
 export function SettingsPage() {
-  const { user, membership, logout } = useAuth()
+  const { user, membership, logout, refresh } = useAuth()
+  const [verifyMsg, setVerifyMsg] = useState<string | null>(null)
+
+  async function onResendVerify() {
+    try {
+      const res = await authApi.resendVerification()
+      setVerifyMsg(
+        res.debug_token
+          ? `Sent. Local link: /verify-email?token=${res.debug_token}`
+          : "Verification email sent.",
+      )
+      await refresh()
+    } catch (err) {
+      setVerifyMsg(userFacingError(err))
+    }
+  }
 
   return (
     <main className="page">
@@ -907,10 +959,24 @@ export function SettingsPage() {
         <dl className="settings-dl">
           <div><dt>Name</dt><dd>{user?.name}</dd></div>
           <div><dt>Email</dt><dd>{user?.email}</dd></div>
-          <div><dt>Email verified</dt><dd>{user?.email_verified_at ? formatDateTime(user.email_verified_at) : "Not verified"}</dd></div>
+          <div>
+            <dt>Email verified</dt>
+            <dd>
+              {user?.email_verified_at ? formatDateTime(user.email_verified_at) : "Not verified"}
+              {!user?.email_verified_at ? (
+                <>
+                  {" "}
+                  <button type="button" className="text-button" onClick={() => void onResendVerify()}>
+                    Resend
+                  </button>
+                </>
+              ) : null}
+            </dd>
+          </div>
           <div><dt>Role</dt><dd>{membership?.role ?? "—"}</dd></div>
           <div><dt>Organization</dt><dd>{membership?.organization_name ?? "Organization information unavailable."}</dd></div>
         </dl>
+        {verifyMsg ? <p className="muted">{verifyMsg}</p> : null}
         <button type="button" className="secondary-button" onClick={() => void logout()}>Sign out</button>
       </section>
       <section className="settings-card">

@@ -38,6 +38,8 @@ All knobs are env-configurable (`RETRIEVAL_*`, `RERANK_TOP_K`, `LLM_PROVIDER=ext
 ```bash
 docker compose up --build
 API_URL=http://localhost:8000 ./scripts/smoke-phase-c.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-1-e2e.sh
 ```
 
 UI: http://localhost:8443 → **Ask Vridhi** / **Search**
@@ -76,4 +78,5 @@ API docs: http://localhost:8000/docs
 API_URL=http://localhost:8000 ./scripts/smoke-phase-b.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-c.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-1-e2e.sh
 ```

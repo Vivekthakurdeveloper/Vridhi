@@ -136,7 +136,19 @@ def register(
             organization_name=org.name,
             organization_slug=org.slug,
         )
-    return AuthSessionOut(user=_user_out(user), membership=membership_out)
+    debug_verify = None
+    raw = getattr(user, "_raw_verify_token", None)
+    if (
+        raw
+        and settings.app_env == "development"
+        and settings.email_provider == "log"
+    ):
+        debug_verify = raw
+    return AuthSessionOut(
+        user=_user_out(user),
+        membership=membership_out,
+        debug_verify_token=debug_verify,
+    )
 
 
 @router.post("/v1/auth/login", response_model=AuthSessionOut)
@@ -206,6 +218,24 @@ def verify_email(
 ) -> dict:
     auth.verify_email(token=body.token, request_id=request.state.ctx.request_id)
     return {"ok": True}
+
+
+@router.post("/v1/auth/resend-verification")
+def resend_verification(
+    request: Request,
+    ctx: Annotated[RequestContext, Depends(require_auth)],
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    assert ctx.user
+    token = auth.resend_email_verification(
+        user_id=ctx.user.id,
+        request_id=request.state.ctx.request_id,
+    )
+    out: dict = {"ok": True}
+    if settings.app_env == "development" and settings.email_provider == "log":
+        out["debug_token"] = token
+    return out
 
 
 @router.get("/v1/auth/me", response_model=AuthSessionOut)

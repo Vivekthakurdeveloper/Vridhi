@@ -157,7 +157,7 @@ class AuthService:
         if session and session.revoked_at is None:
             session.revoked_at = utcnow()
 
-    def _issue_email_verification(self, user: User) -> None:
+    def _issue_email_verification(self, user: User) -> str:
         token = generate_token(32)
         self.db.add(
             EmailVerificationToken(
@@ -177,6 +177,7 @@ class AuthService:
                 ),
             )
         )
+        return token
 
     def register(
         self,
@@ -215,7 +216,7 @@ class AuthService:
             )
             self.db.add(membership)
 
-        self._issue_email_verification(user)
+        verify_token = self._issue_email_verification(user)
         session, token = self.create_session(
             user_id=user.id,
             tenant_id=org.id if org else None,
@@ -235,6 +236,7 @@ class AuthService:
             self.db.refresh(org)
         if membership:
             self.db.refresh(membership)
+        setattr(user, "_raw_verify_token", verify_token)
         return user, org, membership, token
 
     def login(
@@ -379,6 +381,17 @@ class AuthService:
         row.used_at = utcnow()
         self.write_audit(action="auth.verify_email", request_id=request_id, user_id=user.id)
         self.db.commit()
+
+    def resend_email_verification(self, *, user_id: uuid.UUID, request_id: str | None) -> str:
+        user = self.db.get(User, user_id)
+        if not user:
+            raise AppError("UNAUTHORIZED", "Authentication required.", 401)
+        if user.email_verified_at is not None:
+            raise AppError("ALREADY_VERIFIED", "Email is already verified.", 400)
+        token = self._issue_email_verification(user)
+        self.write_audit(action="auth.resend_verification", request_id=request_id, user_id=user.id)
+        self.db.commit()
+        return token
 
     def google_auth_url(self, state: str) -> str:
         if not self.settings.google_oauth_configured:

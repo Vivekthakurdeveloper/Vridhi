@@ -106,7 +106,13 @@ export function SignupPage() {
         password,
         organization_name: organizationName.trim() || undefined,
       })
-      navigate(session.membership ? "/app/dashboard" : "/onboarding")
+      navigate(
+        session.user.email_verified_at
+          ? session.membership
+            ? "/app/dashboard"
+            : "/onboarding"
+          : `/check-email?email=${encodeURIComponent(email.trim())}`,
+      )
     } catch (err) {
       setError(userFacingError(err))
     } finally {
@@ -284,7 +290,65 @@ export function VerifyEmailPage() {
         {status === "loading" ? <LoadingState label={message} /> : null}
         {status === "ok" ? <p className="form-success" role="status">{message}</p> : null}
         {status === "error" ? <p className="form-error" role="alert">{message}</p> : null}
-        <p className="auth-foot"><Link to="/login">Continue to sign in</Link></p>
+        <p className="auth-foot">
+          <Link to="/login">Continue to sign in</Link>
+          {" · "}
+          <Link to="/check-email">Resend verification</Link>
+        </p>
+      </div>
+    </main>
+  )
+}
+
+export function CheckEmailPage() {
+  const [params] = useSearchParams()
+  const { user } = useAuth()
+  const email = params.get("email") || user?.email || ""
+  const [msg, setMsg] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function onResend() {
+    setBusy(true)
+    setError(null)
+    setMsg(null)
+    try {
+      const res = await authApi.resendVerification()
+      setMsg(
+        res.debug_token
+          ? `Verification resent. Local link: /verify-email?token=${res.debug_token}`
+          : "Verification email resent. Check your inbox.",
+      )
+    } catch (err) {
+      setError(userFacingError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <main className="auth-page">
+      <div className="auth-card">
+        <h1>Check your email</h1>
+        <p>
+          We sent a verification link{email ? <> to <strong>{email}</strong></> : null}. Verify to keep
+          your account secure.
+        </p>
+        {msg ? <p className="form-success" role="status">{msg}</p> : null}
+        {error ? <p className="form-error" role="alert">{error}</p> : null}
+        <button
+          type="button"
+          className="secondary-button full"
+          disabled={busy || !user}
+          onClick={() => void onResend()}
+        >
+          {busy ? "Sending..." : "Resend verification"}
+        </button>
+        <p className="auth-foot">
+          <Link to={user ? "/app/dashboard" : "/login"}>
+            {user ? "Continue to workspace" : "Back to sign in"}
+          </Link>
+        </p>
       </div>
     </main>
   )

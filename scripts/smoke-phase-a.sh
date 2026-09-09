@@ -2,7 +2,7 @@
 # Phase A smoke: signup → org → invite → logout → login → accept invite → role change → deactivate
 set -euo pipefail
 
-API="${API_URL:-http://localhost:8001}"
+API="${API_URL:-http://localhost:8000}"
 COOKIE_A="$(mktemp)"
 COOKIE_B="$(mktemp)"
 STAMP="$(date +%s)"

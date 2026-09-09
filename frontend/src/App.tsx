@@ -4,6 +4,7 @@ import { AppShell } from "@/components/AppShell"
 import { LoadingState } from "@/components/States"
 import {
   AcceptInvitePage,
+  CheckEmailPage,
   ForgotPasswordPage,
   LoginPage,
   OnboardingPage,
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/verify-email" element={<VerifyEmailPage />} />
+        <Route path="/check-email" element={<CheckEmailPage />} />
         <Route path="/invite/accept" element={<AcceptInvitePage />} />
         <Route
           path="/onboarding"

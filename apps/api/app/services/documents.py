@@ -472,3 +472,125 @@ class DocumentService:
             )
             or 0
         )
+
+    def update_visibility(
+        self,
+        *,
+        document_id: UUID,
+        tenant_id: UUID,
+        user_id: UUID,
+        role: MemberRole,
+        visibility: DocumentVisibility,
+        selected_user_ids: list[UUID],
+        request_id: Optional[str] = None,
+    ) -> Document:
+        doc = self.get_document(
+            document_id=document_id, tenant_id=tenant_id, user_id=user_id, role=role
+        )
+        if doc.uploaded_by_user_id != user_id and not role_at_least(role, MemberRole.admin):
+            raise AppError(
+                "FORBIDDEN",
+                "You do not have permission to change this document's visibility.",
+                403,
+            )
+        if visibility == DocumentVisibility.selected:
+            if not selected_user_ids:
+                raise AppError(
+                    "SELECTED_USERS_REQUIRED",
+                    "Select at least one user for selected visibility.",
+                    400,
+                )
+            self._validate_selected_users(tenant_id, selected_user_ids)
+        else:
+            selected_user_ids = []
+
+        for g in list(doc.grants or []):
+            self.db.delete(g)
+        doc.visibility = visibility
+        for uid in selected_user_ids:
+            self.db.add(
+                DocumentGrant(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    document_id=doc.id,
+                    user_id=uid,
+                )
+            )
+        self.db.add(
+            AuditEvent(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="document.visibility_changed",
+                metadata_={
+                    "document_id": str(document_id),
+                    "visibility": visibility.value,
+                    "selected_user_ids": [str(u) for u in selected_user_ids],
+                },
+                request_id=request_id,
+            )
+        )
+        self.db.commit()
+        self.db.refresh(doc)
+        return self.get_document(
+            document_id=document_id, tenant_id=tenant_id, user_id=user_id, role=role
+        )
+
+    def retry_ingest(
+        self,
+        *,
+        document_id: UUID,
+        tenant_id: UUID,
+        user_id: UUID,
+        role: MemberRole,
+        request_id: Optional[str] = None,
+    ) -> SyncJob:
+        doc = self.get_document(
+            document_id=document_id, tenant_id=tenant_id, user_id=user_id, role=role
+        )
+        if doc.uploaded_by_user_id != user_id and not role_at_least(role, MemberRole.admin):
+            raise AppError("FORBIDDEN", "You do not have permission to retry this document.", 403)
+        if not doc.current_version_id:
+            raise AppError("VERSION_MISSING", "Document has no version to reprocess.", 400)
+        job = SyncJob(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            connection_id=doc.connection_id,
+            document_id=doc.id,
+            version_id=doc.current_version_id,
+            job_type=SyncJobType.ingest,
+            status=SyncJobStatus.queued,
+            max_attempts=self.settings.ingest_max_attempts,
+            payload={"retry": True},
+        )
+        doc.status = DocumentStatus.pending
+        doc.error_message = None
+        self.db.add(job)
+        self.db.flush()
+        try:
+            message_id = self.queue.enqueue_ingest(
+                job_id=job.id,
+                tenant_id=tenant_id,
+                document_id=doc.id,
+                version_id=doc.current_version_id,
+            )
+            job.sqs_message_id = message_id
+        except Exception as exc:
+            job.status = SyncJobStatus.failed
+            job.error_message = str(exc)
+            doc.status = DocumentStatus.failed
+            self.db.commit()
+            raise AppError("QUEUE_ERROR", "Could not queue retry.", 503) from exc
+        self.db.add(
+            AuditEvent(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                action="document.retry",
+                metadata_={"document_id": str(document_id), "job_id": str(job.id)},
+                request_id=request_id,
+            )
+        )
+        self.db.commit()
+        self.db.refresh(job)
+        return job

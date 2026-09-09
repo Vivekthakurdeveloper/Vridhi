@@ -18,7 +18,9 @@ from app.routers.documents import (
     get_document_job_handler,
     get_job_handler,
     list_documents_handler,
+    patch_document_visibility_handler,
     preview_document_handler,
+    retry_document_handler,
     upload_document,
     get_document_service,
 )
@@ -31,8 +33,11 @@ from app.schemas import (
     DashboardOut,
     DocumentOut,
     DocumentPreviewOut,
+    DocumentVisibilityUpdate,
     DocumentsResponse,
     FeaturesOut,
+    MetricsOut,
+    OrphanReportOut,
     SyncJobOut,
     UploadResponse,
     UsageOut,
@@ -40,6 +45,7 @@ from app.schemas import (
 from app.security import MemberRole, MemberStatus
 from app.services.documents import DocumentService
 from app.services.drive import DriveService
+from app.services.ops import collect_metrics, orphan_report
 from app.services.queue import get_ingest_queue
 from app.services.storage import get_object_storage
 from app.services.tokens import get_token_store
@@ -253,6 +259,38 @@ def get_document(
     return get_document_handler(document_id=document_id, ctx=ctx, svc=svc, db=db)
 
 
+@router.patch("/v1/documents/{document_id}", response_model=DocumentOut)
+def patch_document(
+    document_id: UUID,
+    body: DocumentVisibilityUpdate,
+    ctx: Annotated[RequestContext, Depends(require_tenant)],
+    svc: Annotated[DocumentService, Depends(get_document_service)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentOut:
+    return patch_document_visibility_handler(
+        document_id=document_id, body=body, ctx=ctx, svc=svc, db=db
+    )
+
+
+@router.post("/v1/documents/{document_id}/retry", response_model=SyncJobOut)
+def retry_document(
+    document_id: UUID,
+    ctx: Annotated[RequestContext, Depends(require_tenant)],
+    svc: Annotated[DocumentService, Depends(get_document_service)],
+) -> SyncJobOut:
+    return retry_document_handler(document_id=document_id, ctx=ctx, svc=svc)
+
+
+@router.get("/v1/documents/{document_id}/status", response_model=DocumentOut)
+def document_status(
+    document_id: UUID,
+    ctx: Annotated[RequestContext, Depends(require_tenant)],
+    svc: Annotated[DocumentService, Depends(get_document_service)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentOut:
+    return get_document_handler(document_id=document_id, ctx=ctx, svc=svc, db=db)
+
+
 @router.delete("/v1/documents/{document_id}")
 def delete_document(
     document_id: UUID,
@@ -335,6 +373,27 @@ def get_usage(
     return UsageOut(
         available=False,
         message="Usage data isn't available yet.",
+    )
+
+
+@router.get("/v1/metrics", response_model=MetricsOut)
+def get_metrics(
+    ctx: Annotated[RequestContext, Depends(require_role(MemberRole.admin))],
+    db: Annotated[Session, Depends(get_db)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> MetricsOut:
+    _ = ctx
+    return MetricsOut(**collect_metrics(db, settings))
+
+
+@router.get("/v1/ops/orphans", response_model=OrphanReportOut)
+def get_orphans(
+    ctx: Annotated[RequestContext, Depends(require_role(MemberRole.admin))],
+    db: Annotated[Session, Depends(get_db)],
+) -> OrphanReportOut:
+    assert ctx.membership
+    return OrphanReportOut(
+        **orphan_report(db, tenant_id=ctx.membership.tenant_id)
     )
 
 

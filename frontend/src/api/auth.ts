@@ -23,6 +23,11 @@ export const authApi = {
   verifyEmail(token: string) {
     return apiRequest<{ ok: boolean }>("/v1/auth/verify-email", { method: "POST", body: { token } })
   },
+  resendVerification() {
+    return apiRequest<{ ok: boolean; debug_token?: string }>("/v1/auth/resend-verification", {
+      method: "POST",
+    })
+  },
   acceptInvite(input: { token: string; name?: string; password?: string }) {
     return apiRequest<AuthSession>("/v1/users/invite/accept", { method: "POST", body: input })
   },

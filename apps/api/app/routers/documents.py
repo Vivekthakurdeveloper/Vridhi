@@ -14,6 +14,7 @@ from app.models import Document, DocumentVersion, SyncJob
 from app.schemas import (
     DocumentOut,
     DocumentPreviewOut,
+    DocumentVisibilityUpdate,
     DocumentsResponse,
     SyncJobOut,
     UploadResponse,
@@ -237,4 +238,48 @@ def get_document_job_handler(
     )
     if not job:
         raise AppError("JOB_NOT_FOUND", "No job found for this document.", 404)
+    return job_to_out(job)
+
+
+def patch_document_visibility_handler(
+    document_id: UUID,
+    body: DocumentVisibilityUpdate,
+    ctx: Annotated[RequestContext, Depends(require_tenant)],
+    svc: Annotated[DocumentService, Depends(get_document_service)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentOut:
+    assert ctx.membership and ctx.user
+    try:
+        visibility = DocumentVisibility(body.visibility)
+    except ValueError as exc:
+        raise AppError(
+            "INVALID_VISIBILITY",
+            "Visibility must be private, org, or selected.",
+            400,
+        ) from exc
+    doc = svc.update_visibility(
+        document_id=document_id,
+        tenant_id=ctx.membership.tenant_id,
+        user_id=ctx.user.id,
+        role=ctx.membership.role,
+        visibility=visibility,
+        selected_user_ids=list(body.selected_user_ids or []),
+        request_id=ctx.request_id,
+    )
+    return document_to_out(db, doc)
+
+
+def retry_document_handler(
+    document_id: UUID,
+    ctx: Annotated[RequestContext, Depends(require_tenant)],
+    svc: Annotated[DocumentService, Depends(get_document_service)],
+) -> SyncJobOut:
+    assert ctx.membership and ctx.user
+    job = svc.retry_ingest(
+        document_id=document_id,
+        tenant_id=ctx.membership.tenant_id,
+        user_id=ctx.user.id,
+        role=ctx.membership.role,
+        request_id=ctx.request_id,
+    )
     return job_to_out(job)

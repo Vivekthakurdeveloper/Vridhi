@@ -88,6 +88,8 @@ class OrganizationOut(BaseModel):
 class AuthSessionOut(BaseModel):
     user: UserOut
     membership: Optional[MembershipOut] = None
+    # Development + EMAIL_PROVIDER=log only
+    debug_verify_token: Optional[str] = None
 
 
 class MemberOut(BaseModel):
@@ -192,6 +194,31 @@ class DocumentPreviewOut(BaseModel):
     preview: str
     truncated: bool
     chunk_count: int
+
+
+class DocumentVisibilityUpdate(BaseModel):
+    visibility: Literal["private", "org", "selected"]
+    selected_user_ids: list[UUID] = Field(default_factory=list)
+
+
+class MetricsOut(BaseModel):
+    documents_by_status: dict[str, int]
+    jobs_by_status: dict[str, int]
+    chunks: int
+    conversations: int
+    feedback: int
+    connections: int
+    queue_backend: str
+    search_backend: str
+
+
+class OrphanReportOut(BaseModel):
+    ready_docs_without_chunks: int
+    chunks_without_embeddings: int
+    embeddings_without_chunks: int
+    failed_documents: int
+    dead_jobs: int
+    sample_document_ids: list[UUID] = Field(default_factory=list)
 
 
 class SyncJobOut(BaseModel):
