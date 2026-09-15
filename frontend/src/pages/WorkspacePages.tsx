@@ -453,11 +453,30 @@ export function ConnectionsPage() {
     try {
       const detail = await workspaceEnterpriseApi.submit(entDomain, entKey)
       setEntDetail(detail)
-      setActionMsg(
-        detail.status === "verified"
-          ? "Google Workspace verified."
-          : "Submitted, but verification did not pass — see the error below.",
-      )
+      setActionMsg("Google Workspace verified.")
+    } catch (err) {
+      setActionError(userFacingError(err))
+      // The backend may have persisted status: error / last_error even
+      // though the request threw — reflect that in the UI instead of
+      // leaving entDetail stale until a full page reload. Best-effort:
+      // swallow a failure here so it can't mask the original error above.
+      try {
+        setEntDetail(await workspaceEnterpriseApi.get())
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setEntBusy(false)
+    }
+  }
+
+  async function onRetryVerifyWorkspaceEnterprise() {
+    setEntBusy(true)
+    setActionError(null)
+    try {
+      const detail = await workspaceEnterpriseApi.verify()
+      setEntDetail(detail)
+      setActionMsg("Google Workspace verified.")
     } catch (err) {
       setActionError(userFacingError(err))
     } finally {
@@ -703,6 +722,17 @@ export function ConnectionsPage() {
               Submit &amp; verify
             </button>
           </form>
+
+          {entDetail?.status === "error" ? (
+            <button
+              type="button"
+              className="text-button"
+              disabled={entBusy}
+              onClick={() => void onRetryVerifyWorkspaceEnterprise()}
+            >
+              Retry verification
+            </button>
+          ) : null}
 
           {entDetail?.connected ? (
             <button
