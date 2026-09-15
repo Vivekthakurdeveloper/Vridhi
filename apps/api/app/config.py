@@ -195,6 +195,15 @@ class Settings(BaseSettings):
         alias="DRIVE_ALLOWED_MIME",
     )
 
+    # --- Phase F: Enterprise Google Workspace auth foundation ---
+    # mock = fixture domain/directory listing, no real Google calls;
+    # live = real Domain-Wide Delegation via a per-tenant service account.
+    workspace_enterprise_mode: str = Field(default="mock", alias="WORKSPACE_ENTERPRISE_MODE")
+    workspace_enterprise_scopes: str = Field(
+        default="https://www.googleapis.com/auth/admin.directory.user.readonly",
+        alias="WORKSPACE_ENTERPRISE_SCOPES",
+    )
+
     @field_validator("database_url")
     @classmethod
     def normalize_database_url(cls, value: str) -> str:
@@ -276,6 +285,14 @@ class Settings(BaseSettings):
     @property
     def drive_scope_list(self) -> list[str]:
         return [s for s in self.google_drive_scopes.split() if s.strip()]
+
+    @property
+    def workspace_enterprise_is_mock(self) -> bool:
+        return self.workspace_enterprise_mode.lower().strip() == "mock"
+
+    @property
+    def workspace_enterprise_scope_list(self) -> list[str]:
+        return [s for s in self.workspace_enterprise_scopes.split() if s.strip()]
 
 
 @lru_cache
