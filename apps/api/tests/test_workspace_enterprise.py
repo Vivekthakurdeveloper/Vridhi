@@ -71,6 +71,7 @@ def test_translate_super_admin_403():
     assert "Super Admin" in msg
 
 
-def test_translate_unknown_error_falls_back_to_raw():
+def test_translate_unknown_error_falls_back_to_generic_message():
     msg = translate_workspace_enterprise_error("some completely novel google error")
-    assert msg == "some completely novel google error"
+    assert msg == "Verification failed. Check the service account configuration and try again."
+    assert "some completely novel google error" not in msg

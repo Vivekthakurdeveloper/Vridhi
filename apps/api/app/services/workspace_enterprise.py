@@ -65,9 +65,13 @@ def validate_service_account_key(raw: str) -> dict[str, Any]:
 
 def translate_workspace_enterprise_error(raw_message: str, *, client_id: str | None = None) -> str:
     """Map a known Google Domain-Wide Delegation failure signature to an
-    actionable message. Falls back to the raw message for anything not
-    recognized — never invent a misleading explanation for an error we
-    don't actually recognize.
+    actionable message. Falls back to a generic, safe message for anything
+    not recognized — never invent a misleading explanation for an error we
+    don't actually recognize, and never surface Google's raw error text to
+    the client, since this endpoint is readable by any org member and the
+    raw text can contain internal details. The raw text is still preserved
+    separately (see `verify_directory_access`'s `raw_detail` attribute) for
+    support debugging via `last_error`.
     """
     lowered = raw_message.lower()
 
@@ -93,7 +97,7 @@ def translate_workspace_enterprise_error(raw_message: str, *, client_id: str | N
             "account for verification."
         )
 
-    return raw_message
+    return "Verification failed. Check the service account configuration and try again."
 
 
 def mint_impersonated_token(
@@ -119,21 +123,33 @@ def mint_impersonated_token(
 
 
 def verify_directory_access(
-    key_dict: dict[str, Any], admin_email: str, domain: str, *, mock: bool = False
+    key_dict: dict[str, Any], admin_email: str, domain: str, scopes: list[str], *, mock: bool = False
 ) -> None:
     """Prove Domain-Wide Delegation actually works by impersonating
     `admin_email` and listing 1 user in `domain` via the Admin Directory
-    API. Raises AppError(WORKSPACE_ENTERPRISE_VERIFICATION_FAILED) with a
+    API, using exactly `scopes` to mint the test token — whatever the
+    caller passes here is what actually gets exercised, and is therefore
+    what's safe to record as `verified_scopes`.
+
+    Raises AppError(WORKSPACE_ENTERPRISE_VERIFICATION_FAILED) with a
     translated message on any failure. Never raises Google's raw error
-    directly to a caller outside this module.
+    directly to a caller outside this module — but the raw error text
+    (Google's actual response body when available) is attached to the
+    raised AppError as `.raw_detail` so a caller can persist it for
+    support debugging without ever surfacing it to the API client.
+
+    Retries exactly once on a transient network/DNS-level failure
+    (httpx.RequestError) before giving up, per the spec's error table.
+    An HTTP error response (e.g. 403) is not retried — it's not transient.
     """
     if mock:
         return  # Fixture mode: submitting a well-formed key always "works".
 
+    import time
+
     import httpx
 
-    scopes = ["https://www.googleapis.com/auth/admin.directory.user.readonly"]
-    try:
+    def _attempt() -> None:
         token = mint_impersonated_token(key_dict, admin_email, scopes, mock=False)
         resp = httpx.get(
             "https://admin.googleapis.com/admin/directory/v1/users",
@@ -142,15 +158,27 @@ def verify_directory_access(
             timeout=30.0,
         )
         resp.raise_for_status()
+
+    try:
+        try:
+            _attempt()
+        except httpx.RequestError:
+            time.sleep(1)
+            _attempt()
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see module docstring
-        raw = str(exc)
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None and exc.response.text:
+            raw = exc.response.text
+        else:
+            raw = str(exc)
         client_id = key_dict.get("client_id")
         friendly = translate_workspace_enterprise_error(raw, client_id=client_id)
         logger.warning(
             "workspace_enterprise.verification_failed",
             extra={"operation": "workspace_enterprise_verify"},
         )
-        raise AppError("WORKSPACE_ENTERPRISE_VERIFICATION_FAILED", friendly, 400) from exc
+        err = AppError("WORKSPACE_ENTERPRISE_VERIFICATION_FAILED", friendly, 400)
+        err.raw_detail = raw
+        raise err from exc
 
 
 from uuid import UUID, uuid4
@@ -198,6 +226,9 @@ class WorkspaceEnterpriseService:
 
         conn = self.get_connection(tenant_id)
         if not conn:
+            # No previously-working credential to protect: persist first
+            # (as pending_verification), then verify, updating status
+            # either way.
             conn = WorkspaceEnterpriseConnection(
                 id=uuid4(),
                 tenant_id=tenant_id,
@@ -207,17 +238,32 @@ class WorkspaceEnterpriseService:
                 created_by_user_id=user_id,
             )
             self.db.add(conn)
-        else:
-            conn.google_domain = google_domain
-            conn.service_account_email = key_dict["client_email"]
-            conn.encrypted_key = self.tokens.encrypt(raw_key)
-            conn.created_by_user_id = user_id
-        conn.status = WorkspaceEnterpriseStatus.pending_verification
-        conn.last_error = None
+            conn.status = WorkspaceEnterpriseStatus.pending_verification
+            conn.last_error = None
+            self.db.commit()
+            self.db.refresh(conn)
+
+            self._verify(conn, key_dict, admin_email)
+            return conn
+
+        # Existing connection: there IS a previously-working credential.
+        # Verify the NEW key/domain first, before touching the stored row,
+        # so a failed re-submit can never destroy a working credential.
+        try:
+            self._verify(conn, key_dict, admin_email, domain=google_domain)
+        except AppError:
+            # _verify() already set status=error and last_error and
+            # committed, without touching encrypted_key/google_domain/
+            # service_account_email — the old, working values survive.
+            raise
+
+        # Verification succeeded: now it's safe to overwrite the stored key.
+        conn.google_domain = google_domain
+        conn.service_account_email = key_dict["client_email"]
+        conn.encrypted_key = self.tokens.encrypt(raw_key)
+        conn.created_by_user_id = user_id
         self.db.commit()
         self.db.refresh(conn)
-
-        self._verify(conn, key_dict, admin_email)
         return conn
 
     def verify(self, *, tenant_id: UUID, admin_email: str) -> WorkspaceEnterpriseConnection:
@@ -226,18 +272,43 @@ class WorkspaceEnterpriseService:
             raise AppError(
                 "WORKSPACE_ENTERPRISE_NOT_CONFIGURED", "Submit a service account key first.", 400
             )
+        if conn.status == WorkspaceEnterpriseStatus.disabled:
+            raise AppError(
+                "WORKSPACE_ENTERPRISE_NOT_CONFIGURED",
+                "This connection has been disabled. Submit a new service account key to reconnect.",
+                400,
+            )
         key_dict = json.loads(self.tokens.decrypt(conn.encrypted_key))
         self._verify(conn, key_dict, admin_email)
         return conn
 
     def _verify(
-        self, conn: WorkspaceEnterpriseConnection, key_dict: dict[str, Any], admin_email: str
+        self,
+        conn: WorkspaceEnterpriseConnection,
+        key_dict: dict[str, Any],
+        admin_email: str,
+        *,
+        domain: str | None = None,
     ) -> None:
+        """Run directory verification and persist the outcome onto `conn`.
+
+        `domain` lets a caller verify against a domain that hasn't been
+        written onto `conn` yet (the re-submit flow in submit_and_verify);
+        it defaults to `conn.google_domain` for the already-persisted case
+        (new connections, and the standalone re-verify endpoint). Either
+        way, this method never assigns conn.google_domain/encrypted_key/
+        service_account_email itself — only status/verified_scopes/
+        last_verified_at/last_error — so callers stay in full control of
+        when (or whether) the stored credential fields get overwritten.
+        """
+        target_domain = domain if domain is not None else conn.google_domain
         try:
-            verify_directory_access(key_dict, admin_email, conn.google_domain, mock=self.is_mock)
+            verify_directory_access(
+                key_dict, admin_email, target_domain, self.scopes, mock=self.is_mock
+            )
         except AppError as exc:
             conn.status = WorkspaceEnterpriseStatus.error
-            conn.last_error = exc.message
+            conn.last_error = getattr(exc, "raw_detail", None) or exc.message
             self.db.commit()
             raise
         conn.status = WorkspaceEnterpriseStatus.verified
@@ -251,5 +322,11 @@ class WorkspaceEnterpriseService:
         if not conn:
             return
         conn.status = WorkspaceEnterpriseStatus.disabled
+        # Same pattern as Drive's disconnect(): remove the sensitive
+        # credential entirely rather than leaving it at rest, so a
+        # disabled connection can't be silently resurrected by calling
+        # verify() again. encrypted_key is nullable=False, so clear it to
+        # "" rather than None.
+        conn.encrypted_key = ""
         conn.updated_at = utcnow()
         self.db.commit()
