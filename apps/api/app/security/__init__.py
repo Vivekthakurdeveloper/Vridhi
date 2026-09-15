@@ -62,6 +62,13 @@ class ConnectionStatus(str, enum.Enum):
     not_configured = "not_configured"
 
 
+class WorkspaceEnterpriseStatus(str, enum.Enum):
+    pending_verification = "pending_verification"
+    verified = "verified"
+    error = "error"
+    disabled = "disabled"
+
+
 class SyncJobStatus(str, enum.Enum):
     queued = "queued"
     running = "running"
@@ -73,6 +80,7 @@ class SyncJobStatus(str, enum.Enum):
 class SyncJobType(str, enum.Enum):
     ingest = "ingest"
     drive_sync = "drive_sync"
+    gmail_sync = "gmail_sync"
 
 
 class ConnectionHealth(str, enum.Enum):

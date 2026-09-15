@@ -23,6 +23,7 @@ from app.security import (
     SyncJobStatus,
     SyncJobType,
     UserStatus,
+    WorkspaceEnterpriseStatus,
 )
 
 user_status_enum = Enum(
@@ -65,6 +66,11 @@ message_role_enum = Enum(
 )
 feedback_rating_enum = Enum(
     FeedbackRating, name="feedback_rating", values_callable=lambda x: [e.value for e in x]
+)
+workspace_enterprise_status_enum = Enum(
+    WorkspaceEnterpriseStatus,
+    name="workspace_enterprise_status",
+    values_callable=lambda x: [e.value for e in x],
 )
 
 
@@ -338,6 +344,42 @@ class ConnectionCredential(Base):
     )
 
     connection: Mapped[Connection] = relationship(back_populates="credentials")
+
+
+class WorkspaceEnterpriseConnection(Base):
+    """Per-tenant Domain-Wide Delegation credential. One row per org — this
+    is an org-wide auth capability, not a per-connector connection, so it
+    intentionally does not reuse the Connection/ConnectionCredential shape."""
+
+    __tablename__ = "workspace_enterprise_connections"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", name="workspace_enterprise_connections_tenant_uidx"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    google_domain: Mapped[str] = mapped_column(Text, nullable=False)
+    service_account_email: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[WorkspaceEnterpriseStatus] = mapped_column(
+        workspace_enterprise_status_enum,
+        nullable=False,
+        default=WorkspaceEnterpriseStatus.pending_verification,
+    )
+    verified_scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
 
 
 class Document(Base):
