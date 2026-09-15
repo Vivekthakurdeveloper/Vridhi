@@ -94,3 +94,162 @@ def translate_workspace_enterprise_error(raw_message: str, *, client_id: str | N
         )
 
     return raw_message
+
+
+def mint_impersonated_token(
+    key_dict: dict[str, Any], subject_email: str, scopes: list[str], *, mock: bool = False
+) -> str:
+    """Return an access token that lets the caller act as `subject_email`.
+
+    In mock mode, short-circuits to a fixed fake token — no real Google
+    call, no real key required. Mirrors the MOCK_ACCESS_TOKEN pattern
+    already used by services/drive.py and services/gmail.py.
+    """
+    if mock:
+        return "mock-workspace-enterprise-access-token"
+
+    from google.auth.transport.requests import Request
+    from google.oauth2 import service_account
+
+    credentials = service_account.Credentials.from_service_account_info(
+        key_dict, scopes=scopes
+    ).with_subject(subject_email)
+    credentials.refresh(Request())
+    return credentials.token
+
+
+def verify_directory_access(
+    key_dict: dict[str, Any], admin_email: str, domain: str, *, mock: bool = False
+) -> None:
+    """Prove Domain-Wide Delegation actually works by impersonating
+    `admin_email` and listing 1 user in `domain` via the Admin Directory
+    API. Raises AppError(WORKSPACE_ENTERPRISE_VERIFICATION_FAILED) with a
+    translated message on any failure. Never raises Google's raw error
+    directly to a caller outside this module.
+    """
+    if mock:
+        return  # Fixture mode: submitting a well-formed key always "works".
+
+    import httpx
+
+    scopes = ["https://www.googleapis.com/auth/admin.directory.user.readonly"]
+    try:
+        token = mint_impersonated_token(key_dict, admin_email, scopes, mock=False)
+        resp = httpx.get(
+            "https://admin.googleapis.com/admin/directory/v1/users",
+            params={"domain": domain, "maxResults": 1},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 - deliberately broad, see module docstring
+        raw = str(exc)
+        client_id = key_dict.get("client_id")
+        friendly = translate_workspace_enterprise_error(raw, client_id=client_id)
+        logger.warning(
+            "workspace_enterprise.verification_failed",
+            extra={"operation": "workspace_enterprise_verify"},
+        )
+        raise AppError("WORKSPACE_ENTERPRISE_VERIFICATION_FAILED", friendly, 400) from exc
+
+
+from uuid import UUID, uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import WorkspaceEnterpriseConnection
+from app.security import WorkspaceEnterpriseStatus, utcnow
+from app.services.tokens import TokenStore
+
+
+class WorkspaceEnterpriseService:
+    def __init__(self, db: Session, tokens: TokenStore, *, is_mock: bool, scopes: list[str]):
+        self.db = db
+        self.tokens = tokens
+        self.is_mock = is_mock
+        self.scopes = scopes
+
+    def get_connection(self, tenant_id: UUID) -> WorkspaceEnterpriseConnection | None:
+        return self.db.scalar(
+            select(WorkspaceEnterpriseConnection).where(
+                WorkspaceEnterpriseConnection.tenant_id == tenant_id
+            )
+        )
+
+    def connection_detail(self, tenant_id: UUID) -> dict[str, Any]:
+        conn = self.get_connection(tenant_id)
+        if not conn:
+            return {"connected": False, "status": None}
+        return {
+            "connected": conn.status == WorkspaceEnterpriseStatus.verified,
+            "status": conn.status.value,
+            "google_domain": conn.google_domain,
+            "service_account_email": conn.service_account_email,
+            "verified_scopes": conn.verified_scopes,
+            "last_verified_at": conn.last_verified_at,
+            "last_error": conn.last_error,
+        }
+
+    def submit_and_verify(
+        self, *, tenant_id: UUID, user_id: UUID, google_domain: str, raw_key: str, admin_email: str
+    ) -> WorkspaceEnterpriseConnection:
+        key_dict = validate_service_account_key(raw_key)
+
+        conn = self.get_connection(tenant_id)
+        if not conn:
+            conn = WorkspaceEnterpriseConnection(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                google_domain=google_domain,
+                service_account_email=key_dict["client_email"],
+                encrypted_key=self.tokens.encrypt(raw_key),
+                created_by_user_id=user_id,
+            )
+            self.db.add(conn)
+        else:
+            conn.google_domain = google_domain
+            conn.service_account_email = key_dict["client_email"]
+            conn.encrypted_key = self.tokens.encrypt(raw_key)
+            conn.created_by_user_id = user_id
+        conn.status = WorkspaceEnterpriseStatus.pending_verification
+        conn.last_error = None
+        self.db.commit()
+        self.db.refresh(conn)
+
+        self._verify(conn, key_dict, admin_email)
+        return conn
+
+    def verify(self, *, tenant_id: UUID, admin_email: str) -> WorkspaceEnterpriseConnection:
+        conn = self.get_connection(tenant_id)
+        if not conn:
+            raise AppError(
+                "WORKSPACE_ENTERPRISE_NOT_CONFIGURED", "Submit a service account key first.", 400
+            )
+        key_dict = json.loads(self.tokens.decrypt(conn.encrypted_key))
+        self._verify(conn, key_dict, admin_email)
+        return conn
+
+    def _verify(
+        self, conn: WorkspaceEnterpriseConnection, key_dict: dict[str, Any], admin_email: str
+    ) -> None:
+        try:
+            verify_directory_access(key_dict, admin_email, conn.google_domain, mock=self.is_mock)
+        except AppError as exc:
+            conn.status = WorkspaceEnterpriseStatus.error
+            conn.last_error = exc.message
+            self.db.commit()
+            raise
+        conn.status = WorkspaceEnterpriseStatus.verified
+        conn.verified_scopes = " ".join(self.scopes)
+        conn.last_verified_at = utcnow()
+        conn.last_error = None
+        self.db.commit()
+
+    def disable(self, *, tenant_id: UUID) -> None:
+        conn = self.get_connection(tenant_id)
+        if not conn:
+            return
+        conn.status = WorkspaceEnterpriseStatus.disabled
+        conn.updated_at = utcnow()
+        self.db.commit()
