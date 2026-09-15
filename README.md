@@ -69,6 +69,40 @@ API docs: http://localhost:8000/docs
 | GET | `/v1/conversations/{id}` | Chat + citations |
 | POST | `/v1/messages/{id}/feedback` | 👍/👎 |
 
+## Phase F — Enterprise Google Workspace (Domain-Wide Delegation)
+
+Foundation for enterprise-wide access: an admin authorizes a per-tenant
+Google service account for Domain-Wide Delegation, letting Highwatch
+impersonate any employee in the Workspace domain. This is the auth layer
+only — it does not yet sync anyone's mail/Drive (a later phase will).
+
+- **Coexists with, does not replace,** the per-admin OAuth Drive/Gmail
+  connectors above — this is a separate, additive mechanism for
+  enterprise customers.
+- **Submit + verify:** `POST /v1/enterprise/google-workspace` (submits a
+  service-account key and immediately verifies it by impersonating the
+  submitting admin and listing 1 user via the Admin Directory API)
+- **Re-verify:** `POST /v1/enterprise/google-workspace/verify`
+- **Status:** `GET /v1/enterprise/google-workspace`
+- **Disable:** `DELETE /v1/enterprise/google-workspace`
+- **Local:** `WORKSPACE_ENTERPRISE_MODE=mock` (no real Google Workspace domain required)
+
+```bash
+docker compose up --build
+API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
+```
+
+### Real setup (manual, cannot be automated)
+
+1. In your own Google Cloud project, create a service account.
+2. In Google Admin Console → Security → API Controls →
+   Domain-wide Delegation, authorize that service account's Client ID for
+   scope `admin.directory.user.readonly`.
+3. Download the service account's JSON key and paste it into the
+   Connections page along with your Workspace domain.
+
+Then set `WORKSPACE_ENTERPRISE_MODE=live`.
+
 ## Smoke tests
 
 ```bash
