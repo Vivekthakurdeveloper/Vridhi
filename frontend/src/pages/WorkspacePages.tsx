@@ -11,6 +11,7 @@ import {
   jobsApi,
   teamApi,
   usageApi,
+  workspaceEnterpriseApi,
 } from "@/api/workspace"
 import { EmptyState, ErrorState, LoadingState, UnavailableState } from "@/components/States"
 import { Icon } from "@/components/Icon"
@@ -28,6 +29,7 @@ import type {
   PaginatedDocuments,
   SyncJob,
   Usage,
+  WorkspaceEnterpriseStatus,
 } from "@/types"
 import { formatAction, formatDateTime, initials } from "@/utils/format"
 
@@ -290,6 +292,10 @@ export function ConnectionsPage() {
   const [failedDocs, setFailedDocs] = useState<DocumentItem[]>([])
   const [activeJob, setActiveJob] = useState<SyncJob | null>(null)
   const [driveBusy, setDriveBusy] = useState(false)
+  const [entDetail, setEntDetail] = useState<WorkspaceEnterpriseStatus | null>(null)
+  const [entBusy, setEntBusy] = useState(false)
+  const [entDomain, setEntDomain] = useState("")
+  const [entKey, setEntKey] = useState("")
 
   const canManage = membership?.role === "owner" || membership?.role === "admin"
   const drive = connectors.find((c) => c.id === "google_drive")
@@ -310,6 +316,13 @@ export function ConnectionsPage() {
         setFolders([])
         setHistory([])
         setFailedDocs([])
+      }
+      if (canManage) {
+        try {
+          setEntDetail(await workspaceEnterpriseApi.get())
+        } catch {
+          setEntDetail(null)
+        }
       }
     } catch (err) {
       setError(userFacingError(err))
@@ -431,6 +444,40 @@ export function ConnectionsPage() {
     setSelectedFolders((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     )
+  }
+
+  async function onSubmitWorkspaceEnterprise(e: FormEvent) {
+    e.preventDefault()
+    setEntBusy(true)
+    setActionError(null)
+    try {
+      const detail = await workspaceEnterpriseApi.submit(entDomain, entKey)
+      setEntDetail(detail)
+      setActionMsg(
+        detail.status === "verified"
+          ? "Google Workspace verified."
+          : "Submitted, but verification did not pass — see the error below.",
+      )
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setEntBusy(false)
+    }
+  }
+
+  async function onDisableWorkspaceEnterprise() {
+    if (!window.confirm("Disable the Google Workspace enterprise connection?")) return
+    setEntBusy(true)
+    setActionError(null)
+    try {
+      await workspaceEnterpriseApi.disable()
+      setEntDetail(await workspaceEnterpriseApi.get())
+      setActionMsg("Google Workspace connection disabled.")
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setEntBusy(false)
+    }
   }
 
   return (
@@ -600,6 +647,72 @@ export function ConnectionsPage() {
                 ))}
               </ul>
             </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {canManage ? (
+        <section className="drive-panel">
+          <div className="page-head">
+            <div>
+              <span className="eyebrow">ENTERPRISE</span>
+              <h2>Google Workspace (Domain-Wide Delegation)</h2>
+              <p>
+                For organization-wide access: create a service account in your own
+                Google Cloud project, authorize it for Domain-Wide Delegation in your
+                Admin Console (scope: admin.directory.user.readonly), then paste the
+                key below.
+              </p>
+            </div>
+          </div>
+
+          {entDetail?.status ? (
+            <div className="sync-progress">
+              <strong>Status</strong>
+              <span className={`status-pill status-${entDetail.status}`}>{entDetail.status}</span>
+              {entDetail.google_domain ? <p>Domain: {entDetail.google_domain}</p> : null}
+              {entDetail.service_account_email ? (
+                <p>Service account: {entDetail.service_account_email}</p>
+              ) : null}
+              {entDetail.last_error ? <p className="muted">{entDetail.last_error}</p> : null}
+            </div>
+          ) : null}
+
+          <form onSubmit={(e) => void onSubmitWorkspaceEnterprise(e)}>
+            <label>
+              Google Workspace domain
+              <input
+                type="text"
+                value={entDomain}
+                onChange={(e) => setEntDomain(e.target.value)}
+                placeholder="acme.com"
+                required
+              />
+            </label>
+            <label>
+              Service account JSON key
+              <textarea
+                value={entKey}
+                onChange={(e) => setEntKey(e.target.value)}
+                rows={6}
+                placeholder="Paste the full JSON key here"
+                required
+              />
+            </label>
+            <button type="submit" className="primary-button" disabled={entBusy}>
+              Submit &amp; verify
+            </button>
+          </form>
+
+          {entDetail?.connected ? (
+            <button
+              type="button"
+              className="text-button"
+              disabled={entBusy}
+              onClick={() => void onDisableWorkspaceEnterprise()}
+            >
+              Disable
+            </button>
           ) : null}
         </section>
       ) : null}

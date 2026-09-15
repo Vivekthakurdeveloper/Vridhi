@@ -20,6 +20,7 @@ import type {
   UploadResult,
   Usage,
   ApiErrorBody,
+  WorkspaceEnterpriseStatus,
 } from "@/types"
 
 export const dashboardApi = {
@@ -83,6 +84,26 @@ export const driveApi = {
     return apiRequest<{ items: DocumentItem[] }>(
       `/v1/connections/google_drive/failed-documents?limit=${limit}`,
     )
+  },
+}
+
+export const workspaceEnterpriseApi = {
+  get() {
+    return apiRequest<WorkspaceEnterpriseStatus>("/v1/enterprise/google-workspace")
+  },
+  submit(googleDomain: string, serviceAccountKey: string) {
+    return apiRequest<WorkspaceEnterpriseStatus>("/v1/enterprise/google-workspace", {
+      method: "POST",
+      body: { google_domain: googleDomain, service_account_key: serviceAccountKey },
+    })
+  },
+  verify() {
+    return apiRequest<WorkspaceEnterpriseStatus>("/v1/enterprise/google-workspace/verify", {
+      method: "POST",
+    })
+  },
+  disable() {
+    return apiRequest<{ ok: boolean }>("/v1/enterprise/google-workspace", { method: "DELETE" })
   },
 }
 

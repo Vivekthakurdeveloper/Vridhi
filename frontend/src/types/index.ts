@@ -262,3 +262,13 @@ export interface Usage {
   storage_bytes: number | null
 }
 
+export interface WorkspaceEnterpriseStatus {
+  connected: boolean
+  status: string | null
+  google_domain: string | null
+  service_account_email: string | null
+  verified_scopes: string | null
+  last_verified_at: string | null
+  last_error: string | null
+}
+
