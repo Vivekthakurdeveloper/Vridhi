@@ -76,4 +76,5 @@ API docs: http://localhost:8000/docs
 API_URL=http://localhost:8000 ./scripts/smoke-phase-b.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-c.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
 ```
