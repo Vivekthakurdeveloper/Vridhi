@@ -172,9 +172,13 @@ def verify_directory_access(
             raw = str(exc)
         client_id = key_dict.get("client_id")
         friendly = translate_workspace_enterprise_error(raw, client_id=client_id)
+        # Raw Google error text is logged server-side only — it can contain
+        # internal project/config identifiers and must never reach a client.
+        # (last_error, which IS client-readable by any org member, gets the
+        # translated `friendly` message instead — see WorkspaceEnterpriseService._verify.)
         logger.warning(
             "workspace_enterprise.verification_failed",
-            extra={"operation": "workspace_enterprise_verify"},
+            extra={"operation": "workspace_enterprise_verify", "raw_detail": raw},
         )
         err = AppError("WORKSPACE_ENTERPRISE_VERIFICATION_FAILED", friendly, 400)
         err.raw_detail = raw
@@ -272,10 +276,11 @@ class WorkspaceEnterpriseService:
             raise AppError(
                 "WORKSPACE_ENTERPRISE_NOT_CONFIGURED", "Submit a service account key first.", 400
             )
-        if conn.status == WorkspaceEnterpriseStatus.disabled:
+        if conn.status == WorkspaceEnterpriseStatus.disabled or not conn.encrypted_key:
             raise AppError(
                 "WORKSPACE_ENTERPRISE_NOT_CONFIGURED",
-                "This connection has been disabled. Submit a new service account key to reconnect.",
+                "This connection has been disabled or has no valid credentials. "
+                "Submit a new service account key to reconnect.",
                 400,
             )
         key_dict = json.loads(self.tokens.decrypt(conn.encrypted_key))
@@ -308,7 +313,13 @@ class WorkspaceEnterpriseService:
             )
         except AppError as exc:
             conn.status = WorkspaceEnterpriseStatus.error
-            conn.last_error = getattr(exc, "raw_detail", None) or exc.message
+            # last_error is returned by GET /v1/enterprise/google-workspace,
+            # which any org member can read (gated by require_tenant, not
+            # admin) — so only the translated, safe, actionable message goes
+            # here. The raw Google error text (exc.raw_detail) is logged
+            # server-side only (see verify_directory_access), never
+            # persisted or returned to a client.
+            conn.last_error = exc.message
             self.db.commit()
             raise
         conn.status = WorkspaceEnterpriseStatus.verified
