@@ -80,6 +80,7 @@ class SyncJobStatus(str, enum.Enum):
 class SyncJobType(str, enum.Enum):
     ingest = "ingest"
     drive_sync = "drive_sync"
+    gmail_sync = "gmail_sync"
 
 
 class ConnectionHealth(str, enum.Enum):

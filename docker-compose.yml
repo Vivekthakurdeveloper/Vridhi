@@ -72,7 +72,9 @@ services:
       SEARCH_BACKEND: opensearch
       FILE_UPLOAD_ENABLED: "true"
       GOOGLE_DRIVE_ENABLED: "true"
-      GOOGLE_DRIVE_MODE: mock
+      GOOGLE_DRIVE_MODE: oauth
+      GMAIL_ENABLED: "true"
+      GMAIL_MODE: oauth
       TOKEN_BACKEND: fernet
       AI_QUERY_ENABLED: "true"
       SEARCH_ENABLED: "true"
@@ -114,7 +116,9 @@ services:
       QUEUE_BACKEND: sqs
       SEARCH_BACKEND: opensearch
       GOOGLE_DRIVE_ENABLED: "true"
-      GOOGLE_DRIVE_MODE: mock
+      GOOGLE_DRIVE_MODE: oauth
+      GMAIL_ENABLED: "true"
+      GMAIL_MODE: oauth
       TOKEN_BACKEND: fernet
       AI_QUERY_ENABLED: "true"
       SEARCH_ENABLED: "true"

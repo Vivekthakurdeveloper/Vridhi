@@ -87,6 +87,21 @@ export const driveApi = {
   },
 }
 
+export const gmailApi = {
+  disconnect() {
+    return apiRequest<{ ok: boolean }>("/v1/connections/gmail", { method: "DELETE" })
+  },
+  sync(body: { query?: string; incremental?: boolean } = {}) {
+    return apiRequest<SyncJob>("/v1/connections/gmail/sync", {
+      method: "POST",
+      body: {
+        query: body.query,
+        incremental: body.incremental ?? true,
+      },
+    })
+  },
+}
+
 export const workspaceEnterpriseApi = {
   get() {
     return apiRequest<WorkspaceEnterpriseStatus>("/v1/enterprise/google-workspace")

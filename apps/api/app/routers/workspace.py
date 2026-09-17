@@ -40,6 +40,7 @@ from app.schemas import (
 from app.security import MemberRole, MemberStatus
 from app.services.documents import DocumentService
 from app.services.drive import DriveService
+from app.services.gmail import GmailService
 from app.services.queue import get_ingest_queue
 from app.services.storage import get_object_storage
 from app.services.tokens import get_token_store
@@ -57,7 +58,21 @@ def _drive_service(db: Session, settings: Settings) -> DriveService:
     )
 
 
-def _connector_catalog(settings: Settings, drive_detail: dict | None = None) -> list[dict]:
+def _gmail_service(db: Session, settings: Settings) -> GmailService:
+    return GmailService(
+        db,
+        settings,
+        get_token_store(),
+        get_object_storage(),
+        get_ingest_queue(),
+    )
+
+
+def _connector_catalog(
+    settings: Settings,
+    drive_detail: dict | None = None,
+    gmail_detail: dict | None = None,
+) -> list[dict]:
     file_ready = settings.file_upload_ready
     drive_ready = settings.google_drive_ready
     drive_status = "not_implemented"
@@ -81,6 +96,28 @@ def _connector_catalog(settings: Settings, drive_detail: dict | None = None) -> 
             drive_status = "available"
             drive_extra = {"mode": settings.google_drive_mode}
 
+    gmail_ready = settings.gmail_ready
+    gmail_status = "not_implemented"
+    gmail_enabled = False
+    gmail_extra: dict = {}
+    if settings.gmail_enabled:
+        gmail_enabled = gmail_ready
+        if not gmail_ready:
+            gmail_status = "not_configured"
+        elif gmail_detail and gmail_detail.get("connected"):
+            gmail_status = str(gmail_detail.get("status") or "connected")
+            gmail_extra = {
+                "last_sync_at": gmail_detail.get("last_sync_at"),
+                "document_count": gmail_detail.get("document_count"),
+                "failed_document_count": gmail_detail.get("failed_document_count"),
+                "health": gmail_detail.get("health"),
+                "account_email": gmail_detail.get("account_email"),
+                "mode": gmail_detail.get("mode"),
+            }
+        else:
+            gmail_status = "available"
+            gmail_extra = {"mode": settings.gmail_mode}
+
     return [
         {
             "id": "google_drive",
@@ -93,9 +130,10 @@ def _connector_catalog(settings: Settings, drive_detail: dict | None = None) -> 
         {
             "id": "gmail",
             "name": "Gmail",
-            "description": "Index email metadata and attachments for company knowledge.",
-            "status": "available" if settings.gmail_enabled else "not_implemented",
-            "enabled": settings.gmail_enabled,
+            "description": "Index email attachments for company knowledge.",
+            "status": gmail_status,
+            "enabled": gmail_enabled,
+            **gmail_extra,
         },
         {
             "id": "file_upload",
@@ -118,7 +156,7 @@ def get_features(
     return FeaturesOut(
         google_login_enabled=settings.google_oauth_configured,
         google_drive_enabled=settings.google_drive_ready,
-        gmail_enabled=settings.gmail_enabled,
+        gmail_enabled=settings.gmail_ready,
         file_upload_enabled=settings.file_upload_ready,
         ai_query_enabled=settings.ai_query_ready,
         search_enabled=settings.search_ready,
@@ -143,8 +181,14 @@ def list_connectors(
     detail = None
     if settings.google_drive_ready:
         detail = _drive_service(db, settings).connection_detail(ctx.membership.tenant_id)
+    gmail_detail = None
+    if settings.gmail_ready:
+        gmail_detail = _gmail_service(db, settings).connection_detail(ctx.membership.tenant_id)
     return ConnectorsResponse(
-        connectors=[ConnectorOut(**item) for item in _connector_catalog(settings, detail)]
+        connectors=[
+            ConnectorOut(**item)
+            for item in _connector_catalog(settings, detail, gmail_detail)
+        ]
     )
 
 
@@ -182,7 +226,10 @@ def get_dashboard(
     detail = None
     if settings.google_drive_ready:
         detail = _drive_service(db, settings).connection_detail(tenant_id)
-    catalog = _connector_catalog(settings, detail)
+    gmail_detail = None
+    if settings.gmail_ready:
+        gmail_detail = _gmail_service(db, settings).connection_detail(tenant_id)
+    catalog = _connector_catalog(settings, detail, gmail_detail)
     connected = sum(
         1
         for c in catalog
@@ -190,7 +237,12 @@ def get_dashboard(
         or (c["id"] == "file_upload" and c["enabled"])
     )
     available = sum(1 for c in catalog if c["enabled"])
-    last_sync = detail.get("last_sync_at") if detail else None
+    sync_times = [
+        d.get("last_sync_at")
+        for d in (detail, gmail_detail)
+        if d and d.get("last_sync_at")
+    ]
+    last_sync = max(sync_times) if sync_times else None
 
     return DashboardOut(
         documents=svc.count_ready_documents(tenant_id),
@@ -367,6 +419,18 @@ def connect_connector(
             "ok": True,
             "connector_id": connector_id,
             "oauth_start_path": "/v1/connections/google_drive/oauth/start",
+        }
+    if connector_id == "gmail":
+        if not settings.gmail_ready:
+            raise AppError(
+                "CONNECTOR_NOT_CONFIGURED",
+                "Gmail isn't configured yet.",
+                503,
+            )
+        return {
+            "ok": True,
+            "connector_id": connector_id,
+            "oauth_start_path": "/v1/connections/gmail/oauth/start",
         }
     raise AppError(
         "CONNECTOR_NOT_AVAILABLE",

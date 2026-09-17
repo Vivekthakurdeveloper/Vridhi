@@ -195,6 +195,35 @@ class Settings(BaseSettings):
         alias="DRIVE_ALLOWED_MIME",
     )
 
+    # --- Phase E: Gmail ---
+    # mock = local fixture sync without Google; oauth = real Gmail
+    # Reuses GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.
+    gmail_mode: str = Field(default="mock", alias="GMAIL_MODE")
+    gmail_redirect_uri: str = Field(
+        default="http://localhost:8000/v1/connections/gmail/oauth/callback",
+        alias="GOOGLE_GMAIL_REDIRECT_URI",
+    )
+    gmail_scopes: str = Field(
+        default="https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email",
+        alias="GMAIL_SCOPES",
+    )
+    gmail_sync_page_size: int = Field(default=50, alias="GMAIL_SYNC_PAGE_SIZE")
+    gmail_max_attachment_bytes: int = Field(
+        default=26_214_400, alias="GMAIL_MAX_ATTACHMENT_BYTES"
+    )  # 25 MiB — Gmail's own attachment cap
+    gmail_query: str = Field(default="has:attachment", alias="GMAIL_QUERY")
+    gmail_allowed_mime: str = Field(
+        default=(
+            "application/pdf,"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation,"
+            "text/plain,"
+            "text/csv"
+        ),
+        alias="GMAIL_ALLOWED_MIME",
+    )
+
     # --- Phase F: Enterprise Google Workspace auth foundation ---
     # mock = fixture domain/directory listing, no real Google calls;
     # live = real Domain-Wide Delegation via a per-tenant service account.
@@ -285,6 +314,23 @@ class Settings(BaseSettings):
     @property
     def drive_scope_list(self) -> list[str]:
         return [s for s in self.google_drive_scopes.split() if s.strip()]
+
+    @property
+    def gmail_ready(self) -> bool:
+        if not self.gmail_enabled:
+            return False
+        mode = self.gmail_mode.lower().strip()
+        if mode == "mock":
+            return True
+        return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def gmail_allowed_mime_set(self) -> set[str]:
+        return set(_split_csv(self.gmail_allowed_mime))
+
+    @property
+    def gmail_scope_list(self) -> list[str]:
+        return [s for s in self.gmail_scopes.split() if s.strip()]
 
     @property
     def workspace_enterprise_is_mock(self) -> bool:
