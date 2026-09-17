@@ -1,13 +1,14 @@
 import { FormEvent, useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { useAuth } from "@/auth/AuthContext"
-import { ApiError, userFacingError } from "@/api/client"
+import { API_BASE, ApiError, userFacingError } from "@/api/client"
 import { featuresApi } from "@/api/auth"
 import {
   auditApi,
   connectorsApi,
   documentsApi,
   driveApi,
+  gmailApi,
   jobsApi,
   teamApi,
   usageApi,
@@ -290,11 +291,17 @@ export function ConnectionsPage() {
   const [failedDocs, setFailedDocs] = useState<DocumentItem[]>([])
   const [activeJob, setActiveJob] = useState<SyncJob | null>(null)
   const [driveBusy, setDriveBusy] = useState(false)
+  const [gmailBusy, setGmailBusy] = useState(false)
+  const [activeGmailJob, setActiveGmailJob] = useState<SyncJob | null>(null)
 
   const canManage = membership?.role === "owner" || membership?.role === "admin"
   const drive = connectors.find((c) => c.id === "google_drive")
   const driveConnected =
     !!drive && ["connected", "syncing", "sync_failed"].includes(drive.status)
+  const gmail = connectors.find((c) => c.id === "gmail")
+  const gmailConnected =
+    !!gmail && ["connected", "syncing", "sync_failed"].includes(gmail.status)
+
 
   async function load() {
     setLoading(true)
@@ -360,6 +367,22 @@ export function ConnectionsPage() {
     return () => window.clearInterval(timer)
   }, [activeJob?.id, activeJob?.status])
 
+  useEffect(() => {
+    if (!activeGmailJob || ["succeeded", "failed", "dead"].includes(activeGmailJob.status)) return
+    const timer = window.setInterval(async () => {
+      try {
+        const job = await jobsApi.get(activeGmailJob.id)
+        setActiveGmailJob(job)
+        if (["succeeded", "failed", "dead"].includes(job.status)) {
+          await load()
+        }
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [activeGmailJob?.id, activeGmailJob?.status])
+
   async function onConnect(id: string) {
     setActionError(null)
     setActionMsg(null)
@@ -368,7 +391,13 @@ export function ConnectionsPage() {
         window.location.href = driveApi.oauthStartUrl()
         return
       }
-      await connectorsApi.connect(id)
+      // OAuth connectors (e.g. gmail) answer with the path to start the
+      // handshake; follow it rather than silently reloading the tile.
+      const res = await connectorsApi.connect(id)
+      if (res?.oauth_start_path) {
+        window.location.href = `${API_BASE}${res.oauth_start_path}`
+        return
+      }
       await load()
     } catch (err) {
       if (err instanceof ApiError && err.status === 501) {
@@ -392,6 +421,36 @@ export function ConnectionsPage() {
       setActionError(userFacingError(err))
     } finally {
       setDriveBusy(false)
+    }
+  }
+
+  async function onDisconnectGmail() {
+    if (!window.confirm("Disconnect Gmail? Synced documents stay until you delete them.")) return
+    setGmailBusy(true)
+    setActionError(null)
+    try {
+      await gmailApi.disconnect()
+      setActionMsg("Gmail disconnected.")
+      await load()
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setGmailBusy(false)
+    }
+  }
+
+  async function onSyncGmailNow() {
+    setGmailBusy(true)
+    setActionError(null)
+    try {
+      const job = await gmailApi.sync({ incremental: true })
+      setActiveGmailJob(job)
+      setActionMsg("Gmail sync started.")
+      await load()
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setGmailBusy(false)
     }
   }
 
@@ -455,6 +514,9 @@ export function ConnectionsPage() {
                 connector.status === "disconnected" ||
                 connector.status === "not_configured")
             const isDrive = connector.id === "google_drive"
+            const isGmail = connector.id === "gmail"
+            // OAuth connectors start their handshake on an admin-guarded route.
+            const needsAdmin = isDrive || isGmail
             return (
               <article className="connector-card" key={connector.id}>
                 <div className="connector-top">
@@ -484,7 +546,7 @@ export function ConnectionsPage() {
                     <button
                       type="button"
                       className="primary-button"
-                      disabled={!canManage && isDrive}
+                      disabled={!canManage && needsAdmin}
                       onClick={() => void onConnect(connector.id)}
                     >
                       Connect
@@ -504,7 +566,44 @@ export function ConnectionsPage() {
                       Disconnect
                     </button>
                   ) : null}
+                  {isGmail && gmailConnected && canManage ? (
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={gmailBusy}
+                      onClick={() => void onSyncGmailNow()}
+                    >
+                      Sync Now
+                    </button>
+                  ) : null}
+                  {isGmail && gmailConnected && canManage ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={gmailBusy}
+                      onClick={() => void onDisconnectGmail()}
+                    >
+                      Disconnect
+                    </button>
+                  ) : null}
                 </div>
+                {isGmail && activeGmailJob ? (
+                  <div className="sync-progress">
+                    <strong>Sync job</strong>
+                    <span className={`status-pill status-${activeGmailJob.status}`}>
+                      {activeGmailJob.status}
+                    </span>
+                    <p>
+                      {activeGmailJob.progress_done ?? 0} done ·{" "}
+                      {activeGmailJob.progress_failed ?? 0} failed ·{" "}
+                      {activeGmailJob.progress_skipped ?? 0} skipped /{" "}
+                      {activeGmailJob.progress_total ?? 0} total
+                    </p>
+                    {activeGmailJob.error_message ? (
+                      <p className="muted">{activeGmailJob.error_message}</p>
+                    ) : null}
+                  </div>
+                ) : null}
               </article>
             )
           })}
@@ -603,6 +702,7 @@ export function ConnectionsPage() {
           ) : null}
         </section>
       ) : null}
+
     </main>
   )
 }

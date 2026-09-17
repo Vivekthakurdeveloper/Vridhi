@@ -19,3 +19,4 @@ frontend/dist/
 *.log
 .idea/
 .vscode/
+.superpowers/

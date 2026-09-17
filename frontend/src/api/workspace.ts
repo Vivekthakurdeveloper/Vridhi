@@ -86,6 +86,21 @@ export const driveApi = {
   },
 }
 
+export const gmailApi = {
+  disconnect() {
+    return apiRequest<{ ok: boolean }>("/v1/connections/gmail", { method: "DELETE" })
+  },
+  sync(body: { query?: string; incremental?: boolean } = {}) {
+    return apiRequest<SyncJob>("/v1/connections/gmail/sync", {
+      method: "POST",
+      body: {
+        query: body.query,
+        incremental: body.incremental ?? true,
+      },
+    })
+  },
+}
+
 export const documentsApi = {
   list(page = 1, limit = 20) {
     return apiRequest<PaginatedDocuments>(`/v1/documents?page=${page}&limit=${limit}`)

@@ -14,6 +14,7 @@ from app.security import SyncJobStatus, SyncJobType
 from worker.config import Settings, get_settings
 from worker.db import SessionLocal
 from worker.drive_sync import process_drive_sync_job
+from worker.gmail_sync import process_gmail_sync_job
 from worker.ingest import process_ingest_job
 from worker.pipeline.index import build_search_index
 from worker.storage import build_object_storage
@@ -29,6 +30,10 @@ def _dispatch_job(db, settings: Settings, storage, search, *, job_id: UUID, job_
 
     if resolved == SyncJobType.drive_sync.value or resolved == "drive_sync":
         process_drive_sync_job(db, job_id=job_id)
+        return
+
+    if resolved == SyncJobType.gmail_sync.value or resolved == "gmail_sync":
+        process_gmail_sync_job(db, job_id=job_id)
         return
 
     process_ingest_job(db, settings, storage, search, job_id=job_id)
