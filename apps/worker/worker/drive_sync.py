@@ -85,8 +85,13 @@ def _run_drive_sync(
 
         from app.services.groups import sync_groups_and_memberships
 
+        # Groups sync is a Workspace-Enterprise capability: the token it uses
+        # (get_admin_impersonated_token) is minted from the *enterprise* mock
+        # flag, so keying this off Drive's mode would either write fixture
+        # groups into a live tenant or fire a mock token at the real Admin SDK
+        # whenever the two flags disagree.
         sync_groups_and_memberships(
-            db, conn.tenant_id, is_mock=settings.google_drive_mode.lower() == "mock"
+            db, conn.tenant_id, is_mock=settings.workspace_enterprise_is_mock
         )
 
         payload = dict(job.payload or {})
@@ -280,6 +285,48 @@ def _download_file_bytes(
     return data, out_mime
 
 
+def _enqueue_ingest_job(
+    *,
+    db: Session,
+    settings: Settings,
+    queue: IngestQueue,
+    conn: Connection,
+    document_id: UUID,
+    version_id: UUID,
+    external_id: str,
+) -> SyncJob:
+    """Create + enqueue the child ingest job for a document version.
+
+    Both the normal (re-)ingest path and the content-unchanged ACL-refresh path
+    go through here so the job row and the queue message keep exactly one shape.
+    Re-running ingest for a version is idempotent (worker/ingest.py deletes the
+    version's chunks and calls ``search.delete_by_document`` before reindexing),
+    which is what makes it safe to replay purely to refresh the denormalised ACL
+    fields in OpenSearch.
+    """
+    ingest_job = SyncJob(
+        id=uuid4(),
+        tenant_id=conn.tenant_id,
+        connection_id=conn.id,
+        document_id=document_id,
+        version_id=version_id,
+        job_type=SyncJobType.ingest,
+        status=SyncJobStatus.queued,
+        max_attempts=settings.ingest_max_attempts,
+        payload={"source": "google_drive", "external_id": external_id},
+    )
+    db.add(ingest_job)
+    db.flush()
+    msg_id = queue.enqueue_ingest(
+        job_id=ingest_job.id,
+        tenant_id=conn.tenant_id,
+        document_id=document_id,
+        version_id=version_id,
+    )
+    ingest_job.sqs_message_id = msg_id
+    return ingest_job
+
+
 def _upsert_drive_file(
     *,
     db: Session,
@@ -320,6 +367,13 @@ def _upsert_drive_file(
             default_visibility=visibility_default,
             selected_user_ids=selected_user_ids,
         )
+        # Snapshot what is actually stored (and therefore what is denormalised
+        # into OpenSearch) *before* we overwrite it, so we can tell whether this
+        # sync really changed the ACL.
+        before_visibility = existing.visibility
+        before_grant_ids = {g.user_id for g in (existing.grants or [])}
+        before_group_grant_ids = {g.group_id for g in (existing.group_grants or [])}
+
         existing.visibility = visibility
         for g in list(existing.grants or []):
             db.delete(g)
@@ -330,6 +384,38 @@ def _upsert_drive_file(
             db.add(DocumentGrant(id=uuid4(), tenant_id=conn.tenant_id, document_id=existing.id, user_id=uid))
         for gid in group_grant_ids:
             db.add(DocumentGroupGrant(id=uuid4(), tenant_id=conn.tenant_id, document_id=existing.id, group_id=gid))
+
+        acl_changed = (
+            before_visibility != visibility
+            or before_grant_ids != set(grant_ids)
+            or before_group_grant_ids != set(group_grant_ids)
+        )
+        if acl_changed and existing.current_version_id:
+            # Postgres is now correct, but worker/ingest.py is the only writer of
+            # the denormalised ACL fields (visibility / granted_user_ids /
+            # granted_group_ids) into OpenSearch -- and retrieval treats that
+            # index as the authorization authority. Without replaying ingest for
+            # the current version, every already-indexed chunk would keep the
+            # stale (pre-revocation) ACL and stay answerable via /v1/search and
+            # /v1/chat. Ingest's delete-then-reindex is idempotent, so this is a
+            # safe replay; we only pay for it when the ACL actually moved.
+            _enqueue_ingest_job(
+                db=db,
+                settings=settings,
+                queue=queue,
+                conn=conn,
+                document_id=existing.id,
+                version_id=existing.current_version_id,
+                external_id=external_id,
+            )
+            logger.info(
+                "drive.acl_changed_reingest_enqueued",
+                extra={
+                    "operation": "drive_sync",
+                    "tenant_id": str(conn.tenant_id),
+                    "request_id": str(existing.id),
+                },
+            )
         db.commit()
         return None
 
@@ -418,26 +504,15 @@ def _upsert_drive_file(
     for gid in group_grant_ids:
         db.add(DocumentGroupGrant(id=uuid4(), tenant_id=conn.tenant_id, document_id=doc.id, group_id=gid))
 
-    ingest_job = SyncJob(
-        id=uuid4(),
-        tenant_id=conn.tenant_id,
-        connection_id=conn.id,
+    _enqueue_ingest_job(
+        db=db,
+        settings=settings,
+        queue=queue,
+        conn=conn,
         document_id=doc.id,
         version_id=version.id,
-        job_type=SyncJobType.ingest,
-        status=SyncJobStatus.queued,
-        max_attempts=settings.ingest_max_attempts,
-        payload={"source": "google_drive", "external_id": external_id},
+        external_id=external_id,
     )
-    db.add(ingest_job)
-    db.flush()
-    msg_id = queue.enqueue_ingest(
-        job_id=ingest_job.id,
-        tenant_id=conn.tenant_id,
-        document_id=doc.id,
-        version_id=version.id,
-    )
-    ingest_job.sqs_message_id = msg_id
 
     cfg = dict(conn.config or {})
     cursors = dict(cfg.get("file_cursors") or {})
