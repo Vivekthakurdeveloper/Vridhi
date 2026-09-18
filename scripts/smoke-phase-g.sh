@@ -4,7 +4,10 @@
 # re-sync -> file becomes inaccessible even though content didn't change.
 # This last step is the core scenario this whole phase exists to fix: it is
 # not enough for the two sync jobs to merely "succeed" -- the member's actual
-# access must flip from visible to invisible in between.
+# access must flip from visible to invisible in between, in BOTH places that
+# answer "can this user see this document": the Postgres-backed documents API
+# and the OpenSearch-backed /v1/search path (which is what retrieval and RAG
+# actually authorise against).
 set -euo pipefail
 
 API="${API_URL:-http://localhost:8000}"
@@ -67,6 +70,45 @@ wait_for_job() {
 # HTTP status of GET /v1/documents/$1 as the group member.
 member_doc_status() {
   curl -s -o /dev/null -w '%{http_code}' -b "$member_jar" "$API/v1/documents/$1"
+}
+
+# Poll GET /v1/documents/$1 (as the org owner) until status == ready, i.e. until
+# the *child ingest* job has finished -- not just the parent Drive sync job.
+# This matters: _upsert_drive_file's content-unchanged skip path requires the
+# document to already be `ready`, so re-syncing before ingest lands would take
+# the ordinary re-ingest path and the test would silently prove old behaviour.
+wait_for_doc_ready() {
+  local did="$1" label="$2" i status=""
+  for i in $(seq 1 60); do
+    status=$(curl -sf -b "$COOKIE_JAR" "$API/v1/documents/$did" |
+      python3 -c "import json,sys; print(json.load(sys.stdin)['status'])")
+    if [[ "$status" == "ready" ]]; then
+      return 0
+    fi
+    if [[ "$status" == "failed" ]]; then
+      curl -sf -b "$COOKIE_JAR" "$API/v1/documents/$did"
+      echo "FAIL: $label -- document ingestion failed"
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "FAIL: timed out waiting for $label (last document status=$status)"
+  exit 1
+}
+
+# Echoes 1 if the group member's /v1/search results contain document $1, else 0.
+# Search reads ACL fields denormalised into OpenSearch at ingest time, so this
+# is the only assertion that proves a revocation actually reached the index --
+# Postgres going private is not enough to stop retrieval/RAG surfacing it.
+member_search_hit() {
+  curl -sf -b "$member_jar" -H 'Content-Type: application/json' \
+    -d '{"query":"Finance Group Shared Report","limit":50}' "$API/v1/search" |
+    DOC_ID="$1" python3 -c "
+import json, os, sys
+data = json.load(sys.stdin)
+doc_id = os.environ['DOC_ID']
+print(1 if any(r.get('document_id') == doc_id for r in (data.get('results') or [])) else 0)
+"
 }
 
 echo "== register (becomes org owner/admin) =="
@@ -144,6 +186,18 @@ status_before=$(member_doc_status "$doc_id")
   exit 1
 }
 
+echo "== wait for the child ingest job (document -> ready) so sync #2 hits the skip path =="
+wait_for_doc_ready "$doc_id" "initial ingest of the group-shared doc"
+
+echo "== group member CAN find the group-shared file in search =="
+hit_before=$(member_search_hit "$doc_id")
+[[ "$hit_before" == "1" ]] || {
+  echo "FAIL: expected group member to find the group-shared doc via /v1/search (got hit=$hit_before)"
+  curl -sf -b "$member_jar" -H 'Content-Type: application/json' \
+    -d '{"query":"Finance Group Shared Report","limit":50}' "$API/v1/search"
+  exit 1
+}
+
 echo "== revoke the group share in the mock fixture (content/modifiedTime unchanged) =="
 OVERRIDES_FILE_PY="$OVERRIDES_FILE_PY" FINANCE_GROUP_FILE_ID="$FINANCE_GROUP_FILE_ID" python3 -c "
 import json, os
@@ -172,6 +226,35 @@ status_after=$(member_doc_status "$doc_id")
   exit 1
 }
 
+echo "== group member can NO LONGER find it in search (the revoke reached OpenSearch) =="
+# The skip path updates Postgres synchronously but has to enqueue a re-ingest to
+# rewrite the denormalised ACL fields in the index, so poll rather than assert
+# once. The doc IS still in the member's search results at t=0 here (stale ACL),
+# so this loop can only go green once that re-ingest has actually landed.
+search_closed=0
+for i in $(seq 1 60); do
+  hit_after=$(member_search_hit "$doc_id")
+  if [[ "$hit_after" == "0" ]]; then
+    search_closed=1
+    break
+  fi
+  sleep 1
+done
+[[ "$search_closed" == "1" ]] || {
+  echo "FAIL: group member can still find the doc via /v1/search after revoke+resync --"
+  echo "      the ACL recheck never reached the OpenSearch index (search/RAG still leaks it)"
+  curl -sf -b "$member_jar" -H 'Content-Type: application/json' \
+    -d '{"query":"Finance Group Shared Report","limit":50}' "$API/v1/search"
+  exit 1
+}
+
+# Guard against a false pass: ingest deletes the document's OpenSearch docs
+# *before* reindexing, so a re-ingest that crashed halfway would also make the
+# member's search come back empty. Requiring the document back at `ready` (not
+# `failed`) means the chunks really were rewritten with the new ACL.
+echo "== the ACL-triggered re-ingest actually succeeded (document back to ready) =="
+wait_for_doc_ready "$doc_id" "re-ingest triggered by the ACL change"
+
 echo "== org owner (admin) can still see it regardless =="
 owner_status=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" "$API/v1/documents/$doc_id")
 [[ "$owner_status" == "200" ]] || {
@@ -179,4 +262,4 @@ owner_status=$(curl -s -o /dev/null -w '%{http_code}' -b "$COOKIE_JAR" "$API/v1/
   exit 1
 }
 
-echo "PHASE G SMOKE PASSED (group share granted access, revoke+resync closed it)"
+echo "PHASE G SMOKE PASSED (group share granted access in both Postgres and search; revoke+resync closed both)"
