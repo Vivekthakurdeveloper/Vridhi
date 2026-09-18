@@ -47,10 +47,10 @@ MOCK_GROUP_MEMBERS: dict[str, list[str]] = {
 }
 
 
-def _needs_refresh(last_synced_at: Optional[datetime]) -> bool:
+def _needs_refresh(last_synced_at: Optional[datetime], *, now: Optional[datetime] = None) -> bool:
     if last_synced_at is None:
         return True
-    return utcnow() - last_synced_at > _FRESHNESS_WINDOW
+    return (now or utcnow()) - last_synced_at > _FRESHNESS_WINDOW
 
 
 def sync_groups_and_memberships(db: Session, tenant_id: UUID, *, is_mock: bool) -> None:

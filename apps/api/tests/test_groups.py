@@ -19,6 +19,7 @@ def test_no_refresh_when_fresh():
 
 
 def test_no_refresh_at_exactly_fifteen_minutes_boundary():
-    exactly = utcnow() - timedelta(minutes=15)
+    now = utcnow()
+    exactly = now - timedelta(minutes=15)
     # Right at the boundary should not force a refresh (only strictly older does)
-    assert _needs_refresh(exactly) is False
+    assert _needs_refresh(exactly, now=now) is False
