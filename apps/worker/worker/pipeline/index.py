@@ -59,6 +59,7 @@ class OpenSearchIndex:
                     "visibility": {"type": "keyword"},
                     "uploaded_by_user_id": {"type": "keyword"},
                     "granted_user_ids": {"type": "keyword"},
+                    "granted_group_ids": {"type": "keyword"},
                     "source_url": {"type": "keyword"},
                     "page": {"type": "integer"},
                     "embedding": {

@@ -66,6 +66,7 @@ def document_to_out(db: Session, doc: Document, job: Optional[SyncJob] = None) -
         error_message=doc.error_message,
         byte_size=_version_size(db, doc),
         granted_user_ids=[g.user_id for g in (doc.grants or [])],
+        granted_group_ids=[g.group_id for g in (doc.group_grants or [])],
         created_at=doc.created_at,
         updated_at=doc.updated_at,
     )

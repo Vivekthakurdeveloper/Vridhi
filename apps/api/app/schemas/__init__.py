@@ -174,6 +174,7 @@ class DocumentOut(BaseModel):
     error_message: Optional[str] = None
     byte_size: Optional[int] = None
     granted_user_ids: list[UUID] = Field(default_factory=list)
+    granted_group_ids: list[UUID] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: datetime
 

@@ -18,6 +18,7 @@ from app.models import (
     MessageCitation,
 )
 from app.security import FeedbackRating, MemberRole, MessageRole, utcnow
+from app.services import groups as groups_service
 from app.services.generation import generate_answer, stream_answer_tokens
 from app.services.retrieval import OpenSearchRetriever, rerank_chunks
 
@@ -71,8 +72,9 @@ class RagService:
         q = query.strip()
         if not q:
             raise AppError("VALIDATION_ERROR", "Query is required.", 400)
+        user_group_ids = groups_service.user_group_ids(self.db, user_id)
         retrieved = self.retriever.hybrid_search(
-            query=q, tenant_id=tenant_id, user_id=user_id, role=role
+            query=q, tenant_id=tenant_id, user_id=user_id, role=role, user_group_ids=user_group_ids
         )
         ranked = rerank_chunks(q, retrieved, top_k=max(limit, self.settings.rerank_top_k))
         url_map = self._source_urls([c.document_id for c in ranked], tenant_id)
@@ -157,8 +159,9 @@ class RagService:
         self.db.add(user_msg)
         self.db.flush()
 
+        user_group_ids = groups_service.user_group_ids(self.db, user_id)
         retrieved = self.retriever.hybrid_search(
-            query=q, tenant_id=tenant_id, user_id=user_id, role=role
+            query=q, tenant_id=tenant_id, user_id=user_id, role=role, user_group_ids=user_group_ids
         )
         ranked = rerank_chunks(q, retrieved, top_k=self.settings.rerank_top_k)
         generation = generate_answer(self.settings, query=q, chunks=ranked)

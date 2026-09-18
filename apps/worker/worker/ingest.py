@@ -87,6 +87,7 @@ def process_ingest_job(
         search.delete_by_document(str(doc.tenant_id), str(doc.id))
 
         grant_ids = [str(g.user_id) for g in (doc.grants or [])]
+        grant_group_ids = [str(g.group_id) for g in (doc.group_grants or [])]
         chunk_rows: list[Chunk] = []
         for idx, content in enumerate(pieces):
             row = Chunk(
@@ -119,6 +120,7 @@ def process_ingest_job(
                     "visibility": doc.visibility.value,
                     "uploaded_by_user_id": str(doc.uploaded_by_user_id),
                     "granted_user_ids": grant_ids,
+                    "granted_group_ids": grant_group_ids,
                     "source_url": getattr(doc, "source_url", None),
                     "embedding": vector,
                 },
