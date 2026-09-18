@@ -44,40 +44,11 @@ from app.services.gmail import MOCK_MESSAGES, GmailService
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
 from app.services.tokens import TokenStore, get_token_store
+from worker.google_api import google_get_with_retry
 
 logger = logging.getLogger(__name__)
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
-
-# Gmail reports per-minute quota exhaustion as HTTP 403 with reason
-# "rateLimitExceeded" in the body -- not the more common 429. Confirmed live
-# against a real account: a mailbox with enough matching messages blows
-# through the quota mid-sync, and without this retry the whole job dies on
-# whichever message happens to trip it, even though the very next attempt at
-# that same message succeeds once the per-minute window rolls over.
-_RATE_LIMIT_MAX_RETRIES = 2
-_RATE_LIMIT_BACKOFF_SECONDS = (2, 4)
-
-
-def _google_get_with_retry(url: str, *, params: dict[str, Any] | None, headers: dict[str, str], timeout: float):
-    """httpx.get with one short backoff-and-retry on a transient rate limit.
-
-    Any other error status (auth failure, real permission denial, 404, etc.)
-    is raised immediately -- retrying those would just waste time on a
-    failure that will never resolve itself.
-    """
-    import time
-
-    import httpx
-
-    for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
-        resp = httpx.get(url, params=params, headers=headers, timeout=timeout)
-        if resp.status_code == 403 and "rateLimitExceeded" in resp.text and attempt < _RATE_LIMIT_MAX_RETRIES:
-            time.sleep(_RATE_LIMIT_BACKOFF_SECONDS[attempt])
-            continue
-        resp.raise_for_status()
-        return resp
-    return resp  # unreachable, satisfies type checkers
 
 
 def process_gmail_sync_job(db: Session, *, job_id: UUID) -> None:
@@ -288,12 +259,12 @@ def _list_messages(
         }
         if page_token:
             params["pageToken"] = page_token
-        resp = _google_get_with_retry(
+        resp = google_get_with_retry(
             f"{GMAIL_API_BASE}/messages", params=params, headers=headers, timeout=30.0
         )
         data = resp.json()
         for stub in data.get("messages") or []:
-            detail = _google_get_with_retry(
+            detail = google_get_with_retry(
                 f"{GMAIL_API_BASE}/messages/{stub['id']}",
                 params={"format": "full"},
                 headers=headers,
@@ -323,7 +294,7 @@ def _download_attachment(
     else:
         access = gmail.access_token(conn)
         attachment_id = (part.get("body") or {}).get("attachmentId")
-        resp = _google_get_with_retry(
+        resp = google_get_with_retry(
             f"{GMAIL_API_BASE}/messages/{message['id']}/attachments/{attachment_id}",
             params=None,
             headers={"Authorization": f"Bearer {access}"},
