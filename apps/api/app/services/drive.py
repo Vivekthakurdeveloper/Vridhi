@@ -17,6 +17,7 @@ from app.models import (
     Connection,
     ConnectionCredential,
     Document,
+    Group,
     OrganizationMember,
     SyncJob,
     User,
@@ -552,35 +553,40 @@ class DriveService:
         permissions: list[dict[str, Any]],
         default_visibility: DocumentVisibility,
         selected_user_ids: list[UUID],
-    ) -> tuple[DocumentVisibility, list[UUID]]:
+    ) -> tuple[DocumentVisibility, list[UUID], list[UUID]]:
         """
         Conservative fail-closed mapping:
-        - domain/anyone/org-wide Drive share → org (only if default allows org)
-        - user shares → selected grants for matched active members only
-        - unmatched emails are skipped (never widen access)
-        - if no mappable grants and not domain → private
+        - domain/anyone/org-wide Drive share -> org (only if default allows org)
+        - user shares -> selected grants for matched active members only
+        - group shares -> selected grants for the matched local Group (if known)
+        - unmatched emails/groups are skipped (never widen access)
+        - if no mappable grants and not domain -> private
+
+        Returns (visibility, user_grant_ids, group_grant_ids).
         """
         if default_visibility == DocumentVisibility.private:
-            return DocumentVisibility.private, []
+            return DocumentVisibility.private, [], []
         if default_visibility == DocumentVisibility.selected:
-            return DocumentVisibility.selected, selected_user_ids
+            return DocumentVisibility.selected, selected_user_ids, []
 
-        # default org — still fail-closed if Drive file is only shared to specific users
+        # default org -- still fail-closed if Drive file is only shared to specific users/groups
         has_domain = any(
             p.get("type") in {"domain", "anyone"} and p.get("role") in {"reader", "commenter", "writer", "owner"}
             for p in permissions
         )
         if has_domain:
-            return DocumentVisibility.org, []
+            return DocumentVisibility.org, [], []
 
         emails = [
             str(p.get("emailAddress") or "").lower()
             for p in permissions
             if p.get("type") == "user" and p.get("emailAddress")
         ]
-        if not emails:
-            # No discoverable sharing metadata → keep private
-            return DocumentVisibility.private, []
+        group_emails = [
+            str(p.get("emailAddress") or "").lower()
+            for p in permissions
+            if p.get("type") == "group" and p.get("emailAddress")
+        ]
 
         user_ids = list(
             self.db.execute(
@@ -594,10 +600,23 @@ class DriveService:
             )
             .scalars()
             .all()
-        )
-        if not user_ids:
-            return DocumentVisibility.private, []
-        return DocumentVisibility.selected, user_ids
+        ) if emails else []
+
+        group_ids = list(
+            self.db.execute(
+                select(Group.id).where(
+                    Group.tenant_id == tenant_id,
+                    func.lower(Group.email).in_(group_emails),
+                )
+            )
+            .scalars()
+            .all()
+        ) if group_emails else []
+
+        if not user_ids and not group_ids:
+            # No discoverable/resolvable sharing metadata -> keep private
+            return DocumentVisibility.private, [], []
+        return DocumentVisibility.selected, user_ids, group_ids
 
 
 def new_oauth_state() -> str:
