@@ -13,6 +13,7 @@ from app.models import (
     Connection,
     Document,
     DocumentGrant,
+    DocumentGroupGrant,
     DocumentVersion,
     SyncJob,
 )
@@ -81,6 +82,12 @@ def _run_drive_sync(
         )
         if not conn:
             raise RuntimeError("Drive connection not found")
+
+        from app.services.groups import sync_groups_and_memberships
+
+        sync_groups_and_memberships(
+            db, conn.tenant_id, is_mock=settings.google_drive_mode.lower() == "mock"
+        )
 
         payload = dict(job.payload or {})
         folder_ids = list(payload.get("folder_ids") or [])
@@ -296,14 +303,38 @@ def _upsert_drive_file(
             Document.external_id == external_id,
             Document.deleted_at.is_(None),
         )
-        .options(selectinload(Document.grants))
+        .options(selectinload(Document.grants), selectinload(Document.group_grants))
     )
     prev_modified = ((conn.config or {}).get("file_cursors") or {}).get(external_id)
-    if existing and prev_modified and prev_modified == modified and existing.status == DocumentStatus.ready:
+    content_unchanged = (
+        existing and prev_modified and prev_modified == modified and existing.status == DocumentStatus.ready
+    )
+    if content_unchanged:
+        # Content hasn't changed, so skip re-downloading/re-ingesting it --
+        # but permissions can change without touching modifiedTime (the
+        # single biggest gap this phase exists to close), so always
+        # re-resolve and update grants even on this otherwise-skipped path.
+        visibility, grant_ids, group_grant_ids = drive.map_permissions_to_acl(
+            tenant_id=conn.tenant_id,
+            permissions=list(file_meta.get("permissions") or []),
+            default_visibility=visibility_default,
+            selected_user_ids=selected_user_ids,
+        )
+        existing.visibility = visibility
+        for g in list(existing.grants or []):
+            db.delete(g)
+        for g in list(existing.group_grants or []):
+            db.delete(g)
+        db.flush()
+        for uid in grant_ids:
+            db.add(DocumentGrant(id=uuid4(), tenant_id=conn.tenant_id, document_id=existing.id, user_id=uid))
+        for gid in group_grant_ids:
+            db.add(DocumentGroupGrant(id=uuid4(), tenant_id=conn.tenant_id, document_id=existing.id, group_id=gid))
+        db.commit()
         return None
 
     data, mime = _download_file_bytes(drive, settings, conn, file_meta)
-    visibility, grant_ids = drive.map_permissions_to_acl(
+    visibility, grant_ids, group_grant_ids = drive.map_permissions_to_acl(
         tenant_id=conn.tenant_id,
         permissions=list(file_meta.get("permissions") or []),
         default_visibility=visibility_default,
@@ -333,6 +364,8 @@ def _upsert_drive_file(
             or 0
         ) + 1
         for g in list(doc.grants or []):
+            db.delete(g)
+        for g in list(doc.group_grants or []):
             db.delete(g)
     else:
         doc = Document(
@@ -382,6 +415,8 @@ def _upsert_drive_file(
                 user_id=uid,
             )
         )
+    for gid in group_grant_ids:
+        db.add(DocumentGroupGrant(id=uuid4(), tenant_id=conn.tenant_id, document_id=doc.id, group_id=gid))
 
     ingest_job = SyncJob(
         id=uuid4(),
