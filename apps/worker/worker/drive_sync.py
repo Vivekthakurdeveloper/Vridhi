@@ -26,7 +26,7 @@ from app.security import (
     SyncJobType,
     utcnow,
 )
-from app.services.drive import MOCK_FILES, DriveService
+from app.services.drive import DriveService, get_mock_files
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
 from app.services.tokens import TokenStore, get_token_store
@@ -188,7 +188,7 @@ def _list_files_for_folders(
     if settings.google_drive_mode.lower() == "mock":
         out: list[dict[str, Any]] = []
         for fid in folder_ids:
-            out.extend(MOCK_FILES.get(fid) or [])
+            out.extend(get_mock_files(fid))
         return out
 
     access = drive._access_token(conn)

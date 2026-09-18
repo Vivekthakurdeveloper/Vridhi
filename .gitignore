@@ -20,3 +20,7 @@ frontend/dist/
 .idea/
 .vscode/
 .superpowers/
+
+# Runtime-only side channel scripts/smoke-phase-g.sh uses to mutate mock
+# Drive permissions between two sync calls; never read outside mock mode.
+apps/api/.mock-drive-overrides.json

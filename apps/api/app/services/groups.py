@@ -41,8 +41,12 @@ MOCK_GROUPS: list[dict[str, Any]] = [
 ]
 # member emails per mock group id -- resolved against whatever active org
 # members actually exist at sync time, same fail-closed match as Drive.
+# "finance-member@example.com" is the fixed email scripts/smoke-phase-g.sh
+# always invites as its second org member, so that group resolution actually
+# produces a real GroupMembership row (and, in turn, group-based document
+# access) in mock mode rather than an empty match.
 MOCK_GROUP_MEMBERS: dict[str, list[str]] = {
-    "mockgroup-finance": [],  # populated by the smoke test using the test org's own admin email
+    "mockgroup-finance": ["finance-member@example.com"],
     "mockgroup-eng": [],
 }
 

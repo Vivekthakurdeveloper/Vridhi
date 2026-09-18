@@ -142,4 +142,5 @@ API_URL=http://localhost:8000 ./scripts/smoke-phase-c.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-e.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-g.sh
 ```
