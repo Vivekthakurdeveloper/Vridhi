@@ -36,6 +36,7 @@ from app.security import (
     generate_token,
     utcnow,
 )
+from app.services import autosync
 from app.services.queue import IngestQueue
 from app.services.storage import ObjectStorage
 from app.services.tokens import TokenStore
@@ -230,6 +231,8 @@ class DriveService:
                 "failed_document_count": 0,
                 "selected_folder_ids": [],
                 "mode": self.settings.google_drive_mode,
+                "auto_sync_enabled": None,
+                "auto_sync_paused_reason": None,
             }
         docs = int(
             self.db.scalar(
@@ -269,7 +272,15 @@ class DriveService:
             "selected_folder_ids": list((conn.config or {}).get("selected_folder_ids") or []),
             "mode": self.settings.google_drive_mode,
             "connection_id": conn.id,
+            "auto_sync_enabled": autosync.is_enabled(conn.config),
+            "auto_sync_paused_reason": autosync.paused_reason(conn.config),
         }
+
+    def set_auto_sync(self, *, tenant_id: UUID, user_id: UUID, enabled: bool) -> None:
+        conn = self.get_connection(tenant_id)
+        if not conn or conn.status == ConnectionStatus.disconnected:
+            raise AppError("DRIVE_NOT_CONNECTED", "Connect Google Drive first.", 400)
+        autosync.set_auto_sync(self.db, conn, enabled=enabled, actor_user_id=user_id)
 
     # --- OAuth ---
 

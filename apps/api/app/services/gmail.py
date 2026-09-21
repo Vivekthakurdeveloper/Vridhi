@@ -40,7 +40,7 @@ from app.security import (
     generate_token,
     utcnow,
 )
-from app.services import google_oauth
+from app.services import autosync, google_oauth
 from app.services.queue import IngestQueue
 from app.services.storage import ObjectStorage
 from app.services.tokens import TokenStore
@@ -254,6 +254,8 @@ class GmailService:
                 "document_count": 0,
                 "failed_document_count": 0,
                 "mode": self.settings.gmail_mode,
+                "auto_sync_enabled": None,
+                "auto_sync_paused_reason": None,
             }
         docs = int(
             self.db.scalar(
@@ -292,7 +294,15 @@ class GmailService:
             "failed_document_count": failed,
             "mode": self.settings.gmail_mode,
             "connection_id": conn.id,
+            "auto_sync_enabled": autosync.is_enabled(conn.config),
+            "auto_sync_paused_reason": autosync.paused_reason(conn.config),
         }
+
+    def set_auto_sync(self, *, tenant_id: UUID, user_id: UUID, enabled: bool) -> None:
+        conn = self.get_connection(tenant_id)
+        if not conn or conn.status == ConnectionStatus.disconnected:
+            raise AppError("GMAIL_NOT_CONNECTED", "Connect Gmail first.", 400)
+        autosync.set_auto_sync(self.db, conn, enabled=enabled, actor_user_id=user_id)
 
     # --- OAuth ---
 

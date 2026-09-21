@@ -90,6 +90,7 @@ def job_to_out(job: SyncJob) -> SyncJobOut:
         progress_failed=getattr(job, "progress_failed", 0) or 0,
         progress_skipped=getattr(job, "progress_skipped", 0) or 0,
         error_message=job.error_message,
+        trigger=(job.payload or {}).get("trigger"),
         started_at=job.started_at,
         finished_at=job.finished_at,
         created_at=job.created_at,

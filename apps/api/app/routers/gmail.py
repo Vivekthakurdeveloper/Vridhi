@@ -38,6 +38,8 @@ class GmailConnectionOut(BaseModel):
     failed_document_count: int = 0
     mode: str
     connection_id: Optional[UUID] = None
+    auto_sync_enabled: Optional[bool] = None
+    auto_sync_paused_reason: Optional[str] = None
 
 
 class GmailSyncRequest(BaseModel):
@@ -85,7 +87,26 @@ def get_gmail_connection(
         failed_document_count=int(detail.get("failed_document_count") or 0),
         mode=str(detail.get("mode") or "mock"),
         connection_id=detail.get("connection_id"),
+        auto_sync_enabled=detail.get("auto_sync_enabled"),
+        auto_sync_paused_reason=detail.get("auto_sync_paused_reason"),
     )
+
+
+class AutoSyncRequest(BaseModel):
+    enabled: bool
+
+
+@router.put("/v1/connections/gmail/auto-sync", response_model=GmailConnectionOut)
+def set_gmail_auto_sync(
+    body: AutoSyncRequest,
+    ctx: Annotated[RequestContext, Depends(require_role(MemberRole.admin))],
+    gmail: Annotated[GmailService, Depends(get_gmail_service)],
+) -> GmailConnectionOut:
+    assert ctx.membership and ctx.user
+    gmail.set_auto_sync(
+        tenant_id=ctx.membership.tenant_id, user_id=ctx.user.id, enabled=body.enabled
+    )
+    return get_gmail_connection(ctx=ctx, gmail=gmail)
 
 
 @router.get("/v1/connections/gmail/oauth/start")

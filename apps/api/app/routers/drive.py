@@ -37,6 +37,8 @@ class DriveConnectionOut(BaseModel):
     selected_folder_ids: list[str] = Field(default_factory=list)
     mode: str
     connection_id: Optional[UUID] = None
+    auto_sync_enabled: Optional[bool] = None
+    auto_sync_paused_reason: Optional[str] = None
 
 
 class DriveFolderOut(BaseModel):
@@ -102,7 +104,26 @@ def get_drive_connection(
         selected_folder_ids=list(detail.get("selected_folder_ids") or []),
         mode=str(detail.get("mode") or "mock"),
         connection_id=detail.get("connection_id"),
+        auto_sync_enabled=detail.get("auto_sync_enabled"),
+        auto_sync_paused_reason=detail.get("auto_sync_paused_reason"),
     )
+
+
+class AutoSyncRequest(BaseModel):
+    enabled: bool
+
+
+@router.put("/v1/connections/google_drive/auto-sync", response_model=DriveConnectionOut)
+def set_drive_auto_sync(
+    body: AutoSyncRequest,
+    ctx: Annotated[RequestContext, Depends(require_role(MemberRole.admin))],
+    drive: Annotated[DriveService, Depends(get_drive_service)],
+) -> DriveConnectionOut:
+    assert ctx.membership and ctx.user
+    drive.set_auto_sync(
+        tenant_id=ctx.membership.tenant_id, user_id=ctx.user.id, enabled=body.enabled
+    )
+    return get_drive_connection(ctx=ctx, drive=drive)
 
 
 @router.get("/v1/connections/google_drive/oauth/start")

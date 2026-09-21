@@ -136,6 +136,8 @@ class ConnectorOut(BaseModel):
     health: Optional[str] = None
     account_email: Optional[str] = None
     mode: Optional[str] = None
+    auto_sync_enabled: Optional[bool] = None
+    auto_sync_paused_reason: Optional[str] = None
 
 
 class ConnectorsResponse(BaseModel):
@@ -209,6 +211,7 @@ class SyncJobOut(BaseModel):
     progress_failed: int = 0
     progress_skipped: int = 0
     error_message: Optional[str] = None
+    trigger: Optional[str] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     created_at: datetime
