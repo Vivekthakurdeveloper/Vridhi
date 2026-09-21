@@ -124,6 +124,8 @@ services:
       SEARCH_ENABLED: "true"
       EMBEDDING_PROVIDER: hash
       PYTHONPATH: /api:/app
+      AUTO_SYNC_INTERVAL_SECONDS: ${AUTO_SYNC_INTERVAL_SECONDS:-900}
+      AUTO_SYNC_TICK_SECONDS: ${AUTO_SYNC_TICK_SECONDS:-60}
     depends_on:
       postgres:
         condition: service_healthy

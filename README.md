@@ -161,6 +161,39 @@ Required Domain-Wide Delegation scopes (in addition to Phase F's
 `admin.directory.user.readonly`):
 `admin.directory.group.readonly`, `admin.directory.group.member.readonly`.
 
+## Phase H — Continuous sync + deletion propagation
+
+Drive and Gmail connectors now sync on their own and stop serving content that
+was deleted.
+
+- **Automatic sync:** every 15 minutes (`AUTO_SYNC_INTERVAL_SECONDS`, default
+  900), on by default, admin switch on each connector card
+  (`PUT /v1/connections/{google_drive|gmail}/auto-sync`). Five failed syncs in a
+  row pause it with a visible reason. `AUTO_SYNC_ENABLED_GLOBAL=false` turns the
+  whole scheduler off. Sync Now still works. A queued/running sync job with no
+  progress for `AUTO_SYNC_STALE_AFTER_SECONDS` (default 3600) no longer blocks
+  the next automatic sync, so a crashed worker cannot stall a connector.
+- **Deletion:** a file removed from Drive (deleted, trashed, moved out, folder
+  un-selected) or a Gmail message deleted/trashed is hidden (record kept,
+  audited) and removed from search. If it returns, the next sync restores it.
+  Vridhi's own Delete button now removes the text from search too, and stays
+  deleted across syncs.
+- **Gmail** uses the History API: the first run does a full pass and saves a
+  checkpoint; later runs read only what changed. If the checkpoint expires it
+  falls back to a full pass. Only real Google can prove this part.
+- **Safety:** nothing is hidden unless the Drive listing completed; the Gmail
+  checkpoint only advances after a fully successful batch.
+
+```bash
+# mock mode, short schedule so the smoke doesn't wait 15 minutes
+AUTO_SYNC_INTERVAL_SECONDS=5 AUTO_SYNC_TICK_SECONDS=2 docker compose up -d worker
+API_URL=http://localhost:8000 ./scripts/smoke-phase-h.sh
+```
+
+The smoke needs `GOOGLE_DRIVE_MODE=mock` and `GMAIL_MODE=mock` on the api and
+worker (`docker-compose.yml` defaults both to `oauth`, so flip them locally
+first).
+
 ## Smoke tests
 
 ```bash
@@ -171,4 +204,5 @@ API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-e.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-g.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-h.sh
 ```
