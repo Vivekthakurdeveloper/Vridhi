@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     auto_sync_max_consecutive_failures: int = Field(
         default=5, alias="AUTO_SYNC_MAX_CONSECUTIVE_FAILURES"
     )
+    auto_sync_stale_after_seconds: int = Field(
+        default=3600, alias="AUTO_SYNC_STALE_AFTER_SECONDS"
+    )
 
     # --- Phase C: hybrid retrieval + RAG ---
     retrieval_top_k: int = Field(default=40, alias="RETRIEVAL_TOP_K")

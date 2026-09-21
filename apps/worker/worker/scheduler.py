@@ -14,7 +14,7 @@ the other worker then sees as an active job).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from uuid import UUID
 
@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.config import Settings
 from app.errors import AppError
 from app.models import Connection, SyncJob
-from app.security import DocumentVisibility, SyncJobStatus, SyncJobType, utcnow
+from app.security import ConnectionStatus, DocumentVisibility, SyncJobStatus, SyncJobType, utcnow
 from app.services import autosync
 from app.services.drive import DriveService
 from app.services.gmail import GmailService
@@ -47,7 +47,11 @@ def run_scheduler_tick(settings: Settings, *, now: Optional[datetime] = None) ->
             db.scalars(
                 select(Connection.id).where(
                     Connection.connector_type.in_(autosync.SCHEDULABLE_CONNECTORS),
-                    Connection.status.in_(autosync.SCHEDULABLE_STATUSES),
+                    # syncing is included so a connection stranded by a dead worker
+                    # is reconsidered; _start_if_due decides via effective_status.
+                    Connection.status.in_(
+                        tuple(autosync.SCHEDULABLE_STATUSES) + (ConnectionStatus.syncing,)
+                    ),
                 )
             ).all()
         )
@@ -86,6 +90,10 @@ def _start_if_due(db: Session, settings: Settings, connection_id: UUID, now: dat
                 SyncJob.connection_id == conn.id,
                 SyncJob.job_type.in_(_SYNC_JOB_TYPES),
                 SyncJob.status.in_([SyncJobStatus.queued, SyncJobStatus.running]),
+                # updated_at is bumped by per-file progress commits, so it is a
+                # heartbeat: an older queued/running job is stale, not active.
+                SyncJob.updated_at
+                >= now - timedelta(seconds=settings.auto_sync_stale_after_seconds),
             )
         )
         or 0
@@ -93,7 +101,7 @@ def _start_if_due(db: Session, settings: Settings, connection_id: UUID, now: dat
 
     if not autosync.is_due(
         connector_type=conn.connector_type,
-        status=conn.status,
+        status=autosync.effective_status(conn.status, active),
         connected_by_user_id=conn.connected_by_user_id,
         config=conn.config,
         latest_job_created_at=latest,
@@ -103,6 +111,12 @@ def _start_if_due(db: Session, settings: Settings, connection_id: UUID, now: dat
     ):
         db.rollback()
         return False
+
+    if conn.status == ConnectionStatus.syncing:  # syncing but no fresh job: stale
+        logger.info(
+            "scheduler.stale_sync_ignored",
+            extra={"operation": "scheduler", "tenant_id": str(conn.tenant_id)},
+        )
 
     cfg = conn.config or {}
     tokens, storage, queue = get_token_store(), get_object_storage(), get_ingest_queue()

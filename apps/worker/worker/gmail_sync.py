@@ -266,7 +266,9 @@ def _run_gmail_sync(
             conn.config = cfg
         conn.config = autosync.record_sync_outcome(
             conn.config,
-            succeeded=not (job.progress_failed and not job.progress_done),
+            succeeded=not (
+                job.progress_failed and not (job.progress_done or job.progress_skipped)
+            ),
             max_failures=settings.auto_sync_max_consecutive_failures,
         )
         db.commit()
@@ -285,7 +287,12 @@ def _run_gmail_sync(
             conn.health = ConnectionHealth.error
             conn.last_error = str(exc)[:2000]
             conn.last_error_at = utcnow()
-            if job and job.status == SyncJobStatus.dead:
+            # A dead job is a failed sync. Under QUEUE_BACKEND=db a failed job is
+            # never retried (so never dead), so any failure counts there.
+            if job and (
+                job.status == SyncJobStatus.dead
+                or settings.queue_backend.lower().strip() == "db"
+            ):
                 conn.config = autosync.record_sync_outcome(
                     conn.config,
                     succeeded=False,

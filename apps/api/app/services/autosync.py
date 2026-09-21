@@ -29,6 +29,14 @@ SCHEDULABLE_CONNECTORS = ("google_drive", "gmail")
 SCHEDULABLE_STATUSES = (ConnectionStatus.connected, ConnectionStatus.sync_failed)
 
 
+def effective_status(status: ConnectionStatus, has_fresh_active_job: bool) -> ConnectionStatus:
+    """A ``syncing`` connection with no fresh active job is stale (its worker
+    died mid-run), so treat it as ``connected`` and let auto-sync resume."""
+    if status == ConnectionStatus.syncing and not has_fresh_active_job:
+        return ConnectionStatus.connected
+    return status
+
+
 def is_enabled(config: Optional[dict[str, Any]]) -> bool:
     return (config or {}).get(AUTO_SYNC_ENABLED_KEY) is not False
 

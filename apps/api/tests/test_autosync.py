@@ -150,3 +150,38 @@ def test_set_auto_sync_updates_config_writes_audit_and_commits():
     assert event.action == "connection.auto_sync_changed"
     assert event.user_id == actor
     assert event.metadata_ == {"connector": "gmail", "enabled": False}
+
+
+def test_effective_status_syncing_with_fresh_active_job_stays_syncing():
+    assert (
+        autosync.effective_status(ConnectionStatus.syncing, True) == ConnectionStatus.syncing
+    )
+
+
+def test_effective_status_syncing_without_fresh_active_job_is_connected():
+    assert (
+        autosync.effective_status(ConnectionStatus.syncing, False) == ConnectionStatus.connected
+    )
+
+
+def test_effective_status_connected_stays_connected():
+    assert (
+        autosync.effective_status(ConnectionStatus.connected, False) == ConnectionStatus.connected
+    )
+    assert (
+        autosync.effective_status(ConnectionStatus.connected, True) == ConnectionStatus.connected
+    )
+
+
+def test_effective_status_sync_failed_stays_sync_failed():
+    assert (
+        autosync.effective_status(ConnectionStatus.sync_failed, False)
+        == ConnectionStatus.sync_failed
+    )
+
+
+def test_effective_status_disconnected_stays_disconnected():
+    assert (
+        autosync.effective_status(ConnectionStatus.disconnected, False)
+        == ConnectionStatus.disconnected
+    )
