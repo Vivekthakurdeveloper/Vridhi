@@ -93,17 +93,6 @@ def process_ingest_job(
             db.execute(delete(Chunk).where(Chunk.version_id == version.id))
             db.flush()
 
-        db.refresh(doc)
-        if doc.deleted_at is not None or doc.status == DocumentStatus.deleted:
-            logger.info(
-                "ingest.skipped_deleted_document",
-                extra={"operation": "ingest", "request_id": str(job_id)},
-            )
-            job.status = SyncJobStatus.succeeded
-            job.finished_at = utcnow()
-            db.commit()
-            return
-
         search.ensure_index()
         search.delete_by_document(str(doc.tenant_id), str(doc.id))
 
@@ -126,6 +115,22 @@ def process_ingest_job(
         db.flush()
 
         vectors = _embed_batch(settings, [c.content for c in chunk_rows])
+
+        # A delete can land while the file is parsed and embedded. Check again
+        # right before the first index write; drop the uncommitted chunk rows.
+        db.refresh(doc)
+        if doc.deleted_at is not None or doc.status == DocumentStatus.deleted:
+            db.rollback()
+            job = db.get(SyncJob, job_id)
+            job.status = SyncJobStatus.succeeded
+            job.finished_at = utcnow()
+            db.commit()
+            logger.info(
+                "ingest.skipped_deleted_document",
+                extra={"operation": "ingest", "request_id": str(job_id)},
+            )
+            return
+
         for row, vector in zip(chunk_rows, vectors):
             os_id = f"{doc.tenant_id}:{row.id}"
             search.index_chunk(
@@ -158,6 +163,23 @@ def process_ingest_job(
                     opensearch_id=os_id,
                 )
             )
+
+        # Post-write recheck: a delete during the index writes must not leave
+        # the text searchable. No row lock; a tombstone committing between this
+        # refresh and our commit is an accepted, tiny window.
+        db.refresh(doc)
+        if doc.deleted_at is not None or doc.status == DocumentStatus.deleted:
+            search.delete_by_document(str(doc.tenant_id), str(doc.id))
+            db.rollback()
+            job = db.get(SyncJob, job_id)
+            job.status = SyncJobStatus.succeeded
+            job.finished_at = utcnow()
+            db.commit()
+            logger.info(
+                "ingest.skipped_deleted_document",
+                extra={"operation": "ingest", "request_id": str(job_id)},
+            )
+            return
 
         doc.status = DocumentStatus.ready
         doc.error_message = None
