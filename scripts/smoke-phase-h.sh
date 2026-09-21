@@ -112,6 +112,22 @@ print(sum(1 for j in items if j.get('trigger') == 'schedule' and re.fullmatch(pa
 }
 has_scheduled_jobs() { [[ "$(scheduled_job_count "$1" "$2")" -ge "$3" ]]; }
 
+# failed_job_mentions_outage: succeeds if some Automatic Drive job that failed
+# (or died) recorded the mock listing outage as its error, proving the outage --
+# not some unrelated failure -- is what we are observing.
+failed_job_mentions_outage() {
+  [[ "$(api_get "/v1/connections/google_drive/syncs?limit=100" | python3 -c "
+import json, re, sys
+items = json.load(sys.stdin)['items']
+print(1 if any(
+    j.get('trigger') == 'schedule'
+    and re.fullmatch('failed|dead', j['status'])
+    and 'fail_listing' in (j.get('error_message') or '')
+    for j in items
+) else 0)
+")" == "1" ]]
+}
+
 echo "== register (org owner/admin) =="
 curl -sf -c "$COOKIE_JAR" -H 'Content-Type: application/json' \
   -d "{\"name\":\"Phase H\",\"email\":\"$email\",\"password\":\"$password\",\"organization_name\":\"Phase H Co\"}" \
@@ -158,6 +174,8 @@ poll "two more automatic Drive syncs" 150 has_scheduled_jobs google_drive '.*' "
 poll "latest automatic sync finished" 60 has_scheduled_jobs google_drive 'succeeded' "$((before_jobs + 1))"
 [[ -z "$(doc_id_by_title google_drive 'Leave Policy')" ]] \
   || fail "a manually deleted document was re-imported by an automatic sync"
+gone_from_search "Leave requests require manager approval" "$leave_id" \
+  || fail "a manually deleted document is searchable again after automatic syncs"
 
 echo "== a Gmail message deleted in Google: its attachments disappear from search =="
 poll "Gmail invoice doc synced" 60 has_doc gmail 'invoice-INV-2024-0912'
@@ -170,8 +188,10 @@ poll "Gmail invoice doc gone from search" 150 gone_from_search "Invoice INV-2024
 poll "Gmail invoice doc hidden in the API" 30 doc_is_404 "$inv_id"
 
 echo "== a Drive outage hides nothing =="
+fail_before="$(scheduled_job_count google_drive 'failed|dead')"
 write_json "$DRIVE_OVERRIDES_PY" '{"fail_listing":true}'
-poll "an automatic Drive sync fails" 180 has_scheduled_jobs google_drive 'failed|dead' 1
+poll "a NEW automatic Drive sync fails" 180 has_scheduled_jobs google_drive 'failed|dead' "$((fail_before + 1))"
+poll "the failed sync reports the listing outage" 60 failed_job_mentions_outage
 [[ "$(search_hit "GST invoice must be issued within 7 days" "$gst_id")" == "1" ]] \
   || fail "a failed listing removed a document from search"
 [[ "$(doc_http_status "$gst_id")" == "200" ]] || fail "a failed listing hid a document"
