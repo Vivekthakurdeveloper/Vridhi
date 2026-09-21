@@ -33,7 +33,7 @@ def _dispatch_job(db, settings: Settings, storage, search, *, job_id: UUID, job_
         return
 
     if resolved == SyncJobType.gmail_sync.value or resolved == "gmail_sync":
-        process_gmail_sync_job(db, job_id=job_id)
+        process_gmail_sync_job(db, job_id=job_id, search=search)
         return
 
     process_ingest_job(db, settings, storage, search, job_id=job_id)

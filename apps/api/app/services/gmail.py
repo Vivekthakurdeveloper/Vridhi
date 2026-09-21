@@ -17,8 +17,11 @@ an admin. Per-user mailboxes would require changing that constraint.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -162,6 +165,41 @@ MOCK_MESSAGES: list[dict[str, Any]] = [
         },
     },
 ]
+
+MOCK_HISTORY_ID = "1000"
+
+# Test-only side channel (mock mode only), same idea as the Drive one in
+# services/drive.py: scripts/smoke-phase-h.sh writes this file on the host and
+# both bind-mounted containers see it. Keys (all optional):
+#   removed_message_ids - messages that no longer exist (omitted from listings)
+#   history             - Gmail-shaped history records for get_mock_history
+#   history_id          - the mailbox's current historyId
+_MOCK_OVERRIDES_PATH = Path(
+    os.environ.get("GMAIL_MOCK_OVERRIDES_PATH")
+    or (Path(__file__).resolve().parents[2] / ".mock-gmail-overrides.json")
+)
+
+
+def _read_mock_overrides() -> dict[str, Any]:
+    try:
+        return json.loads(_MOCK_OVERRIDES_PATH.read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+
+
+def get_mock_messages() -> list[dict[str, Any]]:
+    removed = set(_read_mock_overrides().get("removed_message_ids") or [])
+    return [m for m in MOCK_MESSAGES if m["id"] not in removed]
+
+
+def get_mock_history(start_history_id: str) -> tuple[list[dict[str, Any]], str]:
+    """Mock ``users.history.list``: (records newer than the checkpoint, current historyId)."""
+    overrides = _read_mock_overrides()
+    current = str(overrides.get("history_id") or MOCK_HISTORY_ID)
+    records = [
+        r for r in (overrides.get("history") or []) if int(r["id"]) > int(start_history_id)
+    ]
+    return records, current
 
 
 class GmailService:
