@@ -62,6 +62,16 @@ def process_ingest_job(
         if not doc or not version:
             raise RuntimeError("Document or version not found")
 
+        if doc.deleted_at is not None or doc.status == DocumentStatus.deleted:
+            logger.info(
+                "ingest.skipped_deleted_document",
+                extra={"operation": "ingest", "request_id": str(job_id)},
+            )
+            job.status = SyncJobStatus.succeeded
+            job.finished_at = utcnow()
+            db.commit()
+            return
+
         doc.status = DocumentStatus.processing
         db.commit()
 
@@ -82,6 +92,17 @@ def process_ingest_job(
             db.execute(delete(EmbeddingMeta).where(EmbeddingMeta.chunk_id.in_(old_chunks)))
             db.execute(delete(Chunk).where(Chunk.version_id == version.id))
             db.flush()
+
+        db.refresh(doc)
+        if doc.deleted_at is not None or doc.status == DocumentStatus.deleted:
+            logger.info(
+                "ingest.skipped_deleted_document",
+                extra={"operation": "ingest", "request_id": str(job_id)},
+            )
+            job.status = SyncJobStatus.succeeded
+            job.finished_at = utcnow()
+            db.commit()
+            return
 
         search.ensure_index()
         search.delete_by_document(str(doc.tenant_id), str(doc.id))

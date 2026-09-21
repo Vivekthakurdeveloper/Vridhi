@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -36,6 +36,7 @@ from app.security import (
 )
 from app.services.queue import IngestQueue
 from app.services.storage import ObjectStorage
+from app.services.tombstone import REASON_MANUAL, tombstone_document
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,13 @@ class DocumentService:
         settings: Settings,
         storage: ObjectStorage,
         queue: IngestQueue,
+        search: Optional[Any] = None,
     ):
         self.db = db
         self.settings = settings
         self.storage = storage
         self.queue = queue
+        self.search = search
 
     def require_upload_enabled(self) -> None:
         if not self.settings.file_upload_enabled:
@@ -396,17 +399,19 @@ class DocumentService:
         )
         if doc.uploaded_by_user_id != user_id and not role_at_least(role, MemberRole.admin):
             raise AppError("FORBIDDEN", "You do not have permission to delete this document.", 403)
-        doc.status = DocumentStatus.deleted
-        doc.deleted_at = utcnow()
-        self.db.add(
-            AuditEvent(
-                id=uuid4(),
-                tenant_id=tenant_id,
-                user_id=user_id,
-                action="document.deleted",
-                metadata_={"document_id": str(document_id)},
-                request_id=request_id,
+        if self.search is None:
+            raise AppError(
+                "SEARCH_CLEANUP_UNAVAILABLE",
+                "Search cleanup isn't available, so the document was not deleted.",
+                503,
             )
+        tombstone_document(
+            self.db,
+            self.search,
+            doc,
+            reason=REASON_MANUAL,
+            actor_user_id=user_id,
+            request_id=request_id,
         )
         self.db.commit()
 

@@ -21,7 +21,9 @@ from app.schemas import (
 from app.security import DocumentVisibility
 from app.services.documents import DocumentService
 from app.services.queue import IngestQueue, get_ingest_queue
+from app.services.retrieval import get_retriever
 from app.services.storage import ObjectStorage, get_object_storage
+from app.services.tombstone import NullSearchCleanup
 
 
 def get_document_service(
@@ -30,7 +32,8 @@ def get_document_service(
     storage: Annotated[ObjectStorage, Depends(get_object_storage)],
     queue: Annotated[IngestQueue, Depends(get_ingest_queue)],
 ) -> DocumentService:
-    return DocumentService(db, settings, storage, queue)
+    search = get_retriever() if settings.search_ready else NullSearchCleanup()
+    return DocumentService(db, settings, storage, queue, search=search)
 
 
 def _version_size(db: Session, doc: Document) -> Optional[int]:

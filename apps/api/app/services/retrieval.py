@@ -58,6 +58,25 @@ class OpenSearchRetriever:
             timeout=30,
         )
 
+    def delete_by_document(self, tenant_id: str, document_id: str) -> None:
+        """Remove every chunk of one document. Mirrors the worker's index
+        abstraction of the same name so ``tombstone_document`` can call either."""
+        self.client.delete_by_query(
+            index=self.index,
+            body={
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"tenant_id": tenant_id}},
+                            {"term": {"document_id": document_id}},
+                        ]
+                    }
+                }
+            },
+            refresh=True,
+            ignore_unavailable=True,
+        )
+
     def acl_filter(
         self,
         *,
