@@ -67,6 +67,10 @@ def process_ingest_job(
                 "ingest.skipped_deleted_document",
                 extra={"operation": "ingest", "request_id": str(job_id)},
             )
+            # A retry can land here after the post-write undo below failed and
+            # left chunks indexed; clean them before calling the job done. A
+            # raise falls to the generic handler, so the job retries.
+            search.delete_by_document(str(doc.tenant_id), str(doc.id))
             job.status = SyncJobStatus.succeeded
             job.finished_at = utcnow()
             db.commit()

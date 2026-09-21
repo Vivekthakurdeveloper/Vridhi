@@ -185,3 +185,28 @@ def test_effective_status_disconnected_stays_disconnected():
         autosync.effective_status(ConnectionStatus.disconnected, False)
         == ConnectionStatus.disconnected
     )
+
+
+def test_oldest_sync_first_puts_never_synced_then_longest_waiting_first():
+    old, older, recent = "old", "older", "recent"
+    ordered = autosync.oldest_sync_first(
+        [
+            (recent, NOW - timedelta(seconds=60)),
+            ("never", None),
+            (older, NOW - timedelta(hours=3)),
+            (old, NOW - timedelta(hours=1)),
+        ]
+    )
+    assert ordered == ["never", older, old, recent]
+
+
+def test_oldest_sync_first_keeps_input_order_for_ties_and_handles_empty():
+    assert autosync.oldest_sync_first([]) == []
+    assert autosync.oldest_sync_first([("a", None), ("b", None), ("c", None)]) == ["a", "b", "c"]
+    assert autosync.oldest_sync_first([("a", NOW), ("b", NOW)]) == ["a", "b"]
+
+
+def test_max_starts_per_tick_setting_defaults_to_five():
+    from app.config import Settings
+
+    assert Settings.model_fields["auto_sync_max_starts_per_tick"].default == 5

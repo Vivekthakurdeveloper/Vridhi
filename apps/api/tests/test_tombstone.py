@@ -100,3 +100,40 @@ def test_missing_external_ids_is_a_set_difference():
 
 def test_null_search_cleanup_does_nothing():
     assert NullSearchCleanup().delete_by_document("t", "d") is None
+
+
+def test_tombstone_many_failure_log_names_document_and_error_type_only(caplog):
+    db, doc = _FakeDB(), _doc()
+    search = _FakeSearch(fail_for=str(doc.id))
+    with caplog.at_level("WARNING", logger="app.services.tombstone"):
+        tombstone_many(db, search, [doc], reason=REASON_SOURCE_REMOVED, log_operation="test")
+    (record,) = [r for r in caplog.records if r.name == "app.services.tombstone"]
+    text = record.getMessage()
+    assert str(doc.id) in text
+    assert "RuntimeError" in text
+    assert "opensearch down" not in text
+    assert record.exc_info is None
+
+
+def test_delete_document_wraps_index_failure_as_503_and_leaves_document_visible():
+    from app.errors import AppError
+    from app.security import MemberRole
+    from app.services.documents import DocumentService
+
+    doc = _doc()
+    doc.uploaded_by_user_id = uuid4()
+    db = _FakeDB()
+    svc = DocumentService(db, SimpleNamespace(), None, None, _FakeSearch(fail_for=str(doc.id)))
+    svc.get_document = lambda **_: doc  # type: ignore[method-assign]
+    with pytest.raises(AppError) as info:
+        svc.delete_document(
+            document_id=doc.id,
+            tenant_id=doc.tenant_id,
+            user_id=doc.uploaded_by_user_id,
+            role=MemberRole.member,
+        )
+    assert info.value.code == "SEARCH_CLEANUP_UNAVAILABLE"
+    assert info.value.status_code == 503
+    assert "opensearch down" not in str(info.value.message)
+    assert doc.deleted_at is None
+    assert db.commits == 0

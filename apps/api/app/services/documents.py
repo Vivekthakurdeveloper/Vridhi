@@ -405,14 +405,27 @@ class DocumentService:
                 "Search cleanup isn't available, so the document was not deleted.",
                 503,
             )
-        tombstone_document(
-            self.db,
-            self.search,
-            doc,
-            reason=REASON_MANUAL,
-            actor_user_id=user_id,
-            request_id=request_id,
-        )
+        try:
+            tombstone_document(
+                self.db,
+                self.search,
+                doc,
+                reason=REASON_MANUAL,
+                actor_user_id=user_id,
+                request_id=request_id,
+            )
+        except Exception:
+            # The index cleanup runs first, so the document is still undeleted.
+            self.db.rollback()
+            logger.exception(
+                "document.delete_cleanup_failed",
+                extra={"operation": "delete_document", "request_id": request_id},
+            )
+            raise AppError(
+                "SEARCH_CLEANUP_UNAVAILABLE",
+                "Search cleanup isn't available, so the document was not deleted.",
+                503,
+            ) from None
         self.db.commit()
 
     def preview(

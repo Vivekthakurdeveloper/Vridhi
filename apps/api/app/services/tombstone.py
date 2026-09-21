@@ -78,13 +78,20 @@ def tombstone_many(
     the others. Returns how many were hidden."""
     count = 0
     for doc in docs:
+        doc_id = str(doc.id)  # read now: the rollback below expires the row
         try:
             tombstone_document(db, search, doc, reason=reason)
             db.commit()
             count += 1
-        except Exception:
+        except Exception as exc:
             db.rollback()
-            logger.exception("tombstone.failed", extra={"operation": log_operation})
+            # Type only, no traceback or message: search errors can echo request bodies.
+            logger.warning(
+                "tombstone.failed document_id=%s error=%s",
+                doc_id,
+                type(exc).__name__,
+                extra={"operation": log_operation},
+            )
     return count
 
 

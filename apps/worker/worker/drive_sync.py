@@ -37,6 +37,7 @@ from app.services.tombstone import (
     missing_external_ids,
     tombstone_many,
 )
+from worker.google_api import google_get_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +159,9 @@ def _run_drive_sync(
         # completed without raising (a listing error fails the whole job above),
         # so "stored but not listed" really means deleted, trashed, moved out,
         # or its folder was un-selected. Never run this on an incomplete listing.
+        # An empty listing of a folder that is itself gone looks the same, so
+        # confirm the selected folders still exist first.
+        _assert_selected_folders_visible(drive, settings, conn, folder_ids)
         removed_count = _tombstone_missing_drive_docs(
             db, search=search, conn=conn, listed_ids={str(f["id"]) for f in files}
         )
@@ -171,10 +175,21 @@ def _run_drive_sync(
         if not job or not conn:
             raise RuntimeError("Drive sync job or connection missing after deletion pass")
 
+        # Same reason as the per-file cursor write: pick up config/status changes
+        # made through the API during the run, and never resurrect a connection
+        # an admin disconnected mid-sync.
+        db.refresh(conn, ["config", "status"])
         job.status = SyncJobStatus.succeeded
         job.finished_at = utcnow()
+        if conn.status == ConnectionStatus.disconnected:
+            db.commit()
+            return
+
+        # One definition of a failed sync: it drives both the connection
+        # status/health and the auto-sync failure counter.
+        sync_ok = not (job.progress_failed and not (job.progress_done or job.progress_skipped))
         conn.status = ConnectionStatus.connected
-        if job.progress_failed and not job.progress_done:
+        if not sync_ok:
             conn.health = ConnectionHealth.error
             conn.status = ConnectionStatus.sync_failed
             conn.last_error = job.error_message
@@ -192,9 +207,7 @@ def _run_drive_sync(
         conn.config = cfg
         conn.config = autosync.record_sync_outcome(
             conn.config,
-            succeeded=not (
-                job.progress_failed and not (job.progress_done or job.progress_skipped)
-            ),
+            succeeded=sync_ok,
             max_failures=settings.auto_sync_max_consecutive_failures,
         )
         db.commit()
@@ -226,6 +239,43 @@ def _run_drive_sync(
                 )
         db.commit()
         raise
+
+
+def _assert_selected_folders_visible(
+    drive: DriveService,
+    settings: Settings,
+    conn: Connection,
+    folder_ids: list[str],
+) -> None:
+    """Refuse to run the deletion pass if a selected folder is gone.
+
+    ``files.list`` with ``'<id>' in parents`` answers 200 with an empty list when
+    the folder is trashed or no longer shared with the token owner, which would
+    read as "every file was deleted". Fail the job instead so nothing is hidden.
+    Errors name only the folder id (no tokens, no Google response bodies).
+    """
+    if settings.google_drive_mode.lower() == "mock" or not folder_ids:
+        return  # mock listings come from fixtures; there is no folder to lose
+    import httpx
+
+    access = drive._access_token(conn)
+    for folder_id in folder_ids:
+        try:
+            resp = google_get_with_retry(
+                f"https://www.googleapis.com/drive/v3/files/{folder_id}",
+                params={"fields": "id,trashed", "supportsAllDrives": "true"},
+                headers={"Authorization": f"Bearer {access}"},
+                timeout=20.0,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"Drive folder {folder_id} could not be verified "
+                f"(HTTP {exc.response.status_code}); no documents were hidden"
+            ) from None
+        if resp.json().get("trashed"):
+            raise RuntimeError(
+                f"Drive folder {folder_id} is in the trash; no documents were hidden"
+            )
 
 
 def _tombstone_missing_drive_docs(
@@ -588,6 +638,10 @@ def _upsert_drive_file(
         external_id=external_id,
     )
 
+    # The config we read before the (slow) download may be stale: the API can
+    # have changed it meanwhile (auto-sync switch, folder selection, disconnect).
+    # Re-read right before the read-modify-write so we don't revert that.
+    db.refresh(conn, ["config"])
     cfg = dict(conn.config or {})
     cursors = dict(cfg.get("file_cursors") or {})
     cursors[external_id] = modified

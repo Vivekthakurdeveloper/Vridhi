@@ -1,7 +1,6 @@
 import { ApiError, API_BASE, apiRequest, apiUpload } from "@/api/client"
 import type {
   AuditEvent,
-  AutoSyncState,
   ChatMessage,
   Citation,
   Connector,
@@ -10,6 +9,7 @@ import type {
   DocumentPreview,
   DriveConnection,
   DriveFolder,
+  GmailConnection,
   Invite,
   Member,
   MemberRole,
@@ -108,7 +108,7 @@ export const gmailApi = {
     })
   },
   setAutoSync(enabled: boolean) {
-    return apiRequest<AutoSyncState>("/v1/connections/gmail/auto-sync", {
+    return apiRequest<GmailConnection>("/v1/connections/gmail/auto-sync", {
       method: "PUT",
       body: { enabled },
     })

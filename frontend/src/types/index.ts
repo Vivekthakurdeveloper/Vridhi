@@ -160,6 +160,19 @@ export interface DriveConnection {
   connection_id: string | null
 }
 
+export interface GmailConnection extends AutoSyncState {
+  connected: boolean
+  status: string
+  health: string | null
+  account_email: string | null
+  last_sync_at: string | null
+  last_error: string | null
+  document_count: number
+  failed_document_count: number
+  mode: string
+  connection_id: string | null
+}
+
 export interface DriveFolder {
   id: string
   name: string

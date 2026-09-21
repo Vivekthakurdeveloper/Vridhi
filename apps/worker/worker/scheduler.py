@@ -43,20 +43,33 @@ def run_scheduler_tick(settings: Settings, *, now: Optional[datetime] = None) ->
         return 0
     now = now or utcnow()
     with SessionLocal() as db:
-        candidate_ids = list(
-            db.scalars(
-                select(Connection.id).where(
-                    Connection.connector_type.in_(autosync.SCHEDULABLE_CONNECTORS),
-                    # syncing is included so a connection stranded by a dead worker
-                    # is reconsidered; _start_if_due decides via effective_status.
-                    Connection.status.in_(
-                        tuple(autosync.SCHEDULABLE_STATUSES) + (ConnectionStatus.syncing,)
-                    ),
-                )
-            ).all()
+        latest_job = (
+            select(SyncJob.connection_id, func.max(SyncJob.created_at).label("latest"))
+            .where(SyncJob.job_type.in_(_SYNC_JOB_TYPES))
+            .group_by(SyncJob.connection_id)
+            .subquery()
         )
+        rows = db.execute(
+            select(Connection.id, latest_job.c.latest)
+            .outerjoin(latest_job, latest_job.c.connection_id == Connection.id)
+            .where(
+                Connection.connector_type.in_(autosync.SCHEDULABLE_CONNECTORS),
+                # syncing is included so a connection stranded by a dead worker
+                # is reconsidered; _start_if_due decides via effective_status.
+                Connection.status.in_(
+                    tuple(autosync.SCHEDULABLE_STATUSES) + (ConnectionStatus.syncing,)
+                ),
+            )
+        ).all()
+    # Never-synced / longest-waiting first, and at most N started per tick: a
+    # first deploy or a big backlog spreads over several ticks instead of
+    # queuing everything at once. Connections not reached stay due next tick.
+    candidate_ids = autosync.oldest_sync_first((r[0], r[1]) for r in rows)
+    max_starts = max(1, settings.auto_sync_max_starts_per_tick)  # 0 must not stall all syncs
     started = 0
     for connection_id in candidate_ids:
+        if started >= max_starts:
+            break
         try:
             with SessionLocal() as db:
                 if _start_if_due(db, settings, connection_id, now):

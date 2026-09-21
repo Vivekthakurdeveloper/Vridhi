@@ -240,10 +240,21 @@ def _run_gmail_sync(
         if not job or not conn:
             raise RuntimeError("Gmail sync job or connection missing after deletion pass")
 
+        # Same reason as the per-attachment cursor write: pick up config/status
+        # changes made through the API during the run, and never resurrect a
+        # connection an admin disconnected mid-sync.
+        db.refresh(conn, ["config", "status"])
         job.status = SyncJobStatus.succeeded
         job.finished_at = utcnow()
+        if conn.status == ConnectionStatus.disconnected:
+            db.commit()
+            return
+
+        # One definition of a failed sync: it drives both the connection
+        # status/health and the auto-sync failure counter.
+        sync_ok = not (job.progress_failed and not (job.progress_done or job.progress_skipped))
         conn.status = ConnectionStatus.connected
-        if job.progress_failed and not job.progress_done:
+        if not sync_ok:
             conn.health = ConnectionHealth.error
             conn.status = ConnectionStatus.sync_failed
             conn.last_error = job.error_message
@@ -266,9 +277,7 @@ def _run_gmail_sync(
             conn.config = cfg
         conn.config = autosync.record_sync_outcome(
             conn.config,
-            succeeded=not (
-                job.progress_failed and not (job.progress_done or job.progress_skipped)
-            ),
+            succeeded=sync_ok,
             max_failures=settings.auto_sync_max_consecutive_failures,
         )
         db.commit()
@@ -689,6 +698,10 @@ def _upsert_gmail_attachment(
     )
     ingest_job.sqs_message_id = msg_id
 
+    # The config we read before the (slow) download may be stale: the API can
+    # have changed it meanwhile (auto-sync switch, disconnect). Re-read right
+    # before the read-modify-write so we don't revert that.
+    db.refresh(conn, ["config"])
     cfg = dict(conn.config or {})
     cursors = dict(cfg.get("message_cursors") or {})
     cursors[external_id] = internal_date

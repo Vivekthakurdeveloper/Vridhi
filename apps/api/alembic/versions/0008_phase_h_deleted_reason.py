@@ -20,6 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.add_column("documents", sa.Column("deleted_reason", sa.Text(), nullable=True))
+    # Documents soft-deleted before this column existed were deleted by the
+    # Delete button; a sync must never revive them (NULL would read as "hidden by
+    # a sync, revivable").
+    op.execute(
+        "UPDATE documents SET deleted_reason = 'manual' "
+        "WHERE deleted_at IS NOT NULL AND deleted_reason IS NULL"
+    )
 
 
 def downgrade() -> None:

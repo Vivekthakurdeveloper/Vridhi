@@ -15,7 +15,7 @@ State lives in ``connections.config`` (JSONB) - no migration:
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from uuid import UUID, uuid4
 
 from app.models import AuditEvent
@@ -35,6 +35,14 @@ def effective_status(status: ConnectionStatus, has_fresh_active_job: bool) -> Co
     if status == ConnectionStatus.syncing and not has_fresh_active_job:
         return ConnectionStatus.connected
     return status
+
+
+def oldest_sync_first(candidates: Iterable[tuple[Any, Optional[datetime]]]) -> list[Any]:
+    """Order ``(key, latest_sync_job_created_at)`` pairs so never-synced
+    connections come first, then the longest-waiting. The scheduler starts at
+    most N per tick, so this decides who goes first; ties keep input order."""
+    ordered = sorted(candidates, key=lambda c: (c[1] is not None, c[1]))
+    return [key for key, _ in ordered]
 
 
 def is_enabled(config: Optional[dict[str, Any]]) -> bool:
