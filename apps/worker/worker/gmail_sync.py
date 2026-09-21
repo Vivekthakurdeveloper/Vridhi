@@ -47,7 +47,9 @@ from app.security import (
 from app.services.gmail import GmailService, get_mock_history, get_mock_messages
 from app.services.gmail_history import (
     HistoryChanges,
+    has_excluded_label,
     interpret_history,
+    is_gone,
     message_id_from_external_id,
 )
 from app.services.queue import IngestQueue, get_ingest_queue
@@ -161,7 +163,9 @@ def _run_gmail_sync(
             messages = [
                 m
                 for m in (_fetch_message(gmail, conn, mid) for mid in sorted(changes.added))
-                if m is not None
+                # History covers the whole mailbox; messages.list (the full pass)
+                # leaves out Spam and Trash, so do the same here.
+                if m is not None and not has_excluded_label(m)
             ]
 
         # progress_total counts attachments, not messages — it is what the UI
@@ -223,7 +227,11 @@ def _run_gmail_sync(
             )
         elif listed_message_ids is not None and query == settings.gmail_query:
             deletions_ok = _tombstone_gmail_unlisted(
-                db, search=search, conn=conn, listed_message_ids=listed_message_ids
+                db,
+                search=search,
+                gmail=gmail,
+                conn=conn,
+                listed_message_ids=listed_message_ids,
             )
         job = db.get(SyncJob, job_id)
         conn = db.get(Connection, job.connection_id) if job and job.connection_id else None
@@ -388,7 +396,10 @@ def _fetch_history(
             raise
         data = resp.json()
         records.extend(data.get("history") or [])
-        latest = str(data.get("historyId") or latest)
+        if page_token is None:
+            # Only the first page's historyId is a safe checkpoint: later pages
+            # report a newer id that could skip changes if we stopped early.
+            latest = str(data.get("historyId") or latest)
         page_token = data.get("nextPageToken")
         if not page_token:
             break
@@ -441,9 +452,20 @@ def _tombstone_gmail_messages(
 
 
 def _tombstone_gmail_unlisted(
-    db: Session, *, search: Any, conn: Connection, listed_message_ids: set[str]
+    db: Session,
+    *,
+    search: Any,
+    gmail: GmailService,
+    conn: Connection,
+    listed_message_ids: set[str],
 ) -> bool:
-    """Returns True only if every unlisted document was hidden."""
+    """Hide stored documents whose message is confirmed gone.
+
+    Absence from today's listing is only a candidate signal: documents can also
+    come from a broader manual query or an older GMAIL_QUERY, so each candidate
+    message is looked up and only hidden when Gmail says it is deleted or in
+    Spam/Trash. Returns True only if every document that was gone got hidden.
+    """
     live = db.scalars(
         select(Document).where(
             Document.tenant_id == conn.tenant_id,
@@ -452,11 +474,17 @@ def _tombstone_gmail_unlisted(
             Document.deleted_at.is_(None),
         )
     ).all()
-    docs = [
-        d
-        for d in live
-        if d.external_id and message_id_from_external_id(d.external_id) not in listed_message_ids
-    ]
+    by_message: dict[str, list[Document]] = {}
+    for d in live:
+        if not d.external_id:
+            continue
+        mid = message_id_from_external_id(d.external_id)
+        if mid not in listed_message_ids:
+            by_message.setdefault(mid, []).append(d)
+    docs: list[Document] = []
+    for mid in sorted(by_message):
+        if is_gone(_fetch_message(gmail, conn, mid)):
+            docs.extend(by_message[mid])
     done = tombstone_many(
         db, search, docs, reason=REASON_SOURCE_REMOVED, log_operation="gmail_sync"
     )

@@ -1,7 +1,12 @@
 import json
 
 from app.services import gmail as gmail_module
-from app.services.gmail_history import interpret_history, message_id_from_external_id
+from app.services.gmail_history import (
+    has_excluded_label,
+    interpret_history,
+    is_gone,
+    message_id_from_external_id,
+)
 
 
 def _m(mid):
@@ -102,3 +107,36 @@ def test_mock_history_returns_only_records_after_the_checkpoint(tmp_path, monkey
     _point_overrides_at(tmp_path, monkeypatch, payload)
     records, current = gmail_module.get_mock_history("1001")
     assert [r["id"] for r in records] == ["1002"] and current == "1002"
+
+
+def test_has_excluded_label():
+    assert has_excluded_label(None) is False
+    assert has_excluded_label({"id": "a"}) is False
+    assert has_excluded_label({"id": "a", "labelIds": []}) is False
+    assert has_excluded_label({"id": "a", "labelIds": ["INBOX"]}) is False
+    assert has_excluded_label({"id": "a", "labelIds": ["INBOX", "SPAM"]}) is True
+    assert has_excluded_label({"id": "a", "labelIds": ["TRASH"]}) is True
+    assert has_excluded_label({"id": "a", "labelIds": ["DRAFT"]}) is False
+
+
+def test_is_gone():
+    assert is_gone(None) is True
+    assert is_gone({"id": "a", "labelIds": ["TRASH"]}) is True
+    assert is_gone({"id": "a", "labelIds": ["SPAM"]}) is True
+    assert is_gone({"id": "a", "labelIds": ["INBOX"]}) is False
+    assert is_gone({"id": "a"}) is False
+
+
+def test_spam_label_counts_as_removed():
+    ch = interpret_history([{"id": "1", "labelsAdded": [{**_m("a"), "labelIds": ["SPAM"]}]}])
+    assert ch.removed == {"a"} and ch.added == set()
+
+
+def test_removing_the_spam_label_counts_as_added_again():
+    ch = interpret_history(
+        [
+            {"id": "1", "labelsAdded": [{**_m("a"), "labelIds": ["SPAM"]}]},
+            {"id": "2", "labelsRemoved": [{**_m("a"), "labelIds": ["SPAM"]}]},
+        ]
+    )
+    assert ch.added == {"a"} and ch.removed == set()

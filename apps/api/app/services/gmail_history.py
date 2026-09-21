@@ -9,9 +9,12 @@ a later record overrides an earlier one for the same message.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 TRASH = "TRASH"
+# messages.list leaves these out, so the incremental path and the full pass
+# must agree that a message carrying either label is not part of the mailbox.
+EXCLUDED_LABELS = {"SPAM", TRASH}
 
 
 @dataclass
@@ -44,12 +47,24 @@ def interpret_history(records: Iterable[dict[str, Any]]) -> HistoryChanges:
         for item in record.get("messagesDeleted") or []:
             gone(_message_id(item))
         for item in record.get("labelsAdded") or []:
-            if TRASH in (item.get("labelIds") or []):
+            if EXCLUDED_LABELS.intersection(item.get("labelIds") or []):
                 gone(_message_id(item))
         for item in record.get("labelsRemoved") or []:
-            if TRASH in (item.get("labelIds") or []):
+            if EXCLUDED_LABELS.intersection(item.get("labelIds") or []):
                 here(_message_id(item))
     return HistoryChanges(added=added, removed=removed)
+
+
+def has_excluded_label(message: Optional[dict[str, Any]]) -> bool:
+    """True if the message sits in Spam or Trash (a fetched Gmail message)."""
+    if message is None:
+        return False
+    return bool(EXCLUDED_LABELS.intersection(message.get("labelIds") or []))
+
+
+def is_gone(message: Optional[dict[str, Any]]) -> bool:
+    """A message we looked up is gone if Gmail no longer has it, or it is in Spam/Trash."""
+    return message is None or has_excluded_label(message)
 
 
 def message_id_from_external_id(external_id: str) -> str:
