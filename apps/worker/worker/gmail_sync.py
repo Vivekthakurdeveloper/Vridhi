@@ -44,6 +44,7 @@ from app.security import (
     SyncJobType,
     utcnow,
 )
+from app.services import autosync
 from app.services.gmail import GmailService, get_mock_history, get_mock_messages
 from app.services.gmail_history import (
     HistoryChanges,
@@ -263,6 +264,11 @@ def _run_gmail_sync(
             cfg = dict(conn.config or {})
             cfg["gmail_history_id"] = new_checkpoint
             conn.config = cfg
+        conn.config = autosync.record_sync_outcome(
+            conn.config,
+            succeeded=not (job.progress_failed and not job.progress_done),
+            max_failures=settings.auto_sync_max_consecutive_failures,
+        )
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -279,6 +285,12 @@ def _run_gmail_sync(
             conn.health = ConnectionHealth.error
             conn.last_error = str(exc)[:2000]
             conn.last_error_at = utcnow()
+            if job and job.status == SyncJobStatus.dead:
+                conn.config = autosync.record_sync_outcome(
+                    conn.config,
+                    succeeded=False,
+                    max_failures=settings.auto_sync_max_consecutive_failures,
+                )
         db.commit()
         raise
 

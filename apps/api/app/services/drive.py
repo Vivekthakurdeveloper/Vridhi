@@ -480,6 +480,7 @@ class DriveService:
         visibility: DocumentVisibility = DocumentVisibility.org,
         selected_user_ids: Optional[list[UUID]] = None,
         incremental: bool = True,
+        trigger: str = "manual",
     ) -> SyncJob:
         self.require_ready()
         conn = self.get_connection(tenant_id)
@@ -519,6 +520,7 @@ class DriveService:
                 "visibility": visibility.value,
                 "selected_user_ids": [str(u) for u in (selected_user_ids or [])],
                 "incremental": incremental,
+                "trigger": trigger,
                 "requested_by": str(user_id),
                 "page_token": (conn.config or {}).get("page_token") if incremental else None,
             },

@@ -9,6 +9,7 @@ import boto3
 from botocore.exceptions import ClientError
 from sqlalchemy import select
 
+from app.config import get_settings as get_app_settings
 from app.models import SyncJob
 from app.security import SyncJobStatus, SyncJobType
 from worker.config import Settings, get_settings
@@ -17,6 +18,7 @@ from worker.drive_sync import process_drive_sync_job
 from worker.gmail_sync import process_gmail_sync_job
 from worker.ingest import process_ingest_job
 from worker.pipeline.index import build_search_index
+from worker.scheduler import run_scheduler_tick
 from worker.storage import build_object_storage
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,18 @@ class IngestConsumer:
                 aws_secret_access_key=settings.sqs_secret_access_key,
                 region_name=settings.sqs_region,
             )
+        self._last_scheduler_tick = 0.0
+
+    def _maybe_run_scheduler(self) -> None:
+        app_settings = get_app_settings()
+        now = time.monotonic()
+        if now - self._last_scheduler_tick < app_settings.auto_sync_tick_seconds:
+            return
+        self._last_scheduler_tick = now
+        try:
+            run_scheduler_tick(app_settings)
+        except Exception:
+            logger.exception("scheduler.tick_failed", extra={"operation": "scheduler"})
 
     def queue_url(self) -> str:
         assert self.sqs is not None
@@ -87,6 +101,7 @@ class IngestConsumer:
             except Exception:
                 logger.exception("worker.poll_error", extra={"operation": "poll"})
                 time.sleep(self.settings.worker_poll_interval_seconds)
+            self._maybe_run_scheduler()
 
     def poll_db_once(self) -> None:
         with SessionLocal() as db:

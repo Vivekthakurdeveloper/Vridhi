@@ -422,6 +422,7 @@ class GmailService:
         user_id: UUID,
         query: Optional[str] = None,
         incremental: bool = True,
+        trigger: str = "manual",
     ) -> SyncJob:
         self.require_ready()
         conn = self.get_connection(tenant_id)
@@ -442,6 +443,7 @@ class GmailService:
             payload={
                 "query": query or self.settings.gmail_query,
                 "incremental": incremental,
+                "trigger": trigger,
                 "requested_by": str(user_id),
             },
         )

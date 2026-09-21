@@ -26,6 +26,7 @@ from app.security import (
     SyncJobType,
     utcnow,
 )
+from app.services import autosync
 from app.services.drive import DriveService, get_mock_files
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
@@ -189,6 +190,11 @@ def _run_drive_sync(
         cfg = dict(conn.config or {})
         cfg["page_token"] = utcnow().isoformat()
         conn.config = cfg
+        conn.config = autosync.record_sync_outcome(
+            conn.config,
+            succeeded=not (job.progress_failed and not job.progress_done),
+            max_failures=settings.auto_sync_max_consecutive_failures,
+        )
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -205,6 +211,12 @@ def _run_drive_sync(
             conn.health = ConnectionHealth.error
             conn.last_error = str(exc)[:2000]
             conn.last_error_at = utcnow()
+            if job and job.status == SyncJobStatus.dead:
+                conn.config = autosync.record_sync_outcome(
+                    conn.config,
+                    succeeded=False,
+                    max_failures=settings.auto_sync_max_consecutive_failures,
+                )
         db.commit()
         raise
 
