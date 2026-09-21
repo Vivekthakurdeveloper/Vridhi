@@ -452,6 +452,26 @@ export function ConnectionsPage() {
     }
   }
 
+  async function onToggleAutoSync(id: "google_drive" | "gmail", enabled: boolean) {
+    setActionError(null)
+    setActionMsg(null)
+    try {
+      if (id === "google_drive") {
+        setDriveBusy(true)
+        await driveApi.setAutoSync(enabled)
+      } else {
+        setGmailBusy(true)
+        await gmailApi.setAutoSync(enabled)
+      }
+      await load()
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setDriveBusy(false)
+      setGmailBusy(false)
+    }
+  }
+
   async function onSyncGmailNow() {
     setGmailBusy(true)
     setActionError(null)
@@ -653,6 +673,27 @@ export function ConnectionsPage() {
                     </button>
                   ) : null}
                 </div>
+                {(isDrive && driveConnected) || (isGmail && gmailConnected) ? (
+                  <div className="auto-sync">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={connector.auto_sync_enabled !== false}
+                        disabled={!canManage || driveBusy || gmailBusy}
+                        onChange={(e) =>
+                          void onToggleAutoSync(
+                            connector.id as "google_drive" | "gmail",
+                            e.target.checked,
+                          )
+                        }
+                      />{" "}
+                      Auto-sync every 15 minutes
+                    </label>
+                    {connector.auto_sync_paused_reason ? (
+                      <p className="muted">{connector.auto_sync_paused_reason}</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {isGmail && activeGmailJob ? (
                   <div className="sync-progress">
                     <strong>Sync job</strong>
@@ -744,6 +785,7 @@ export function ConnectionsPage() {
                   <li key={job.id}>
                     <span className={`status-pill status-${job.status}`}>{job.status}</span>
                     <span>
+                      {job.trigger === "schedule" ? "Automatic" : "Manual"} ·{" "}
                       {(job.progress_done ?? 0) + (job.progress_failed ?? 0)}/
                       {job.progress_total ?? 0} files · {formatDateTime(job.created_at)}
                     </span>

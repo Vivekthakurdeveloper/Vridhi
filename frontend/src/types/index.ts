@@ -80,6 +80,8 @@ export interface Connector {
   health: string | null
   account_email?: string | null
   mode?: string | null
+  auto_sync_enabled?: boolean | null
+  auto_sync_paused_reason?: string | null
 }
 
 export interface DashboardActivity {
@@ -132,10 +134,16 @@ export interface SyncJob {
   progress_failed?: number
   progress_skipped?: number
   error_message: string | null
+  trigger?: string | null
   started_at: string | null
   finished_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface AutoSyncState {
+  auto_sync_enabled?: boolean | null
+  auto_sync_paused_reason?: string | null
 }
 
 export interface DriveConnection {
