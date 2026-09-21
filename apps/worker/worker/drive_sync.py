@@ -30,11 +30,17 @@ from app.services.drive import DriveService, get_mock_files
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
 from app.services.tokens import TokenStore, get_token_store
+from app.services.tombstone import (
+    REASON_MANUAL,
+    REASON_SOURCE_REMOVED,
+    missing_external_ids,
+    tombstone_many,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def process_drive_sync_job(db: Session, *, job_id: UUID) -> None:
+def process_drive_sync_job(db: Session, *, job_id: UUID, search: Any) -> None:
     """Worker entrypoint: uses API app services (storage/queue/tokens/settings)."""
     settings = get_settings()
     storage = get_object_storage()
@@ -46,6 +52,7 @@ def process_drive_sync_job(db: Session, *, job_id: UUID) -> None:
         storage=storage,
         queue=queue,
         tokens=tokens,
+        search=search,
         job_id=job_id,
     )
 
@@ -57,6 +64,7 @@ def _run_drive_sync(
     storage: ObjectStorage,
     queue: IngestQueue,
     tokens: TokenStore,
+    search: Any,
     job_id: UUID,
 ) -> None:
     job = db.get(SyncJob, job_id)
@@ -145,6 +153,23 @@ def _run_drive_sync(
         if not job or not conn:
             raise RuntimeError("Drive sync job or connection missing after file loop")
 
+        # Deletion propagation. Reaching this point means the folder listing
+        # completed without raising (a listing error fails the whole job above),
+        # so "stored but not listed" really means deleted, trashed, moved out,
+        # or its folder was un-selected. Never run this on an incomplete listing.
+        removed_count = _tombstone_missing_drive_docs(
+            db, search=search, conn=conn, listed_ids={str(f["id"]) for f in files}
+        )
+        if removed_count:
+            logger.info(
+                "drive.tombstoned_missing",
+                extra={"operation": "drive_sync", "tenant_id": str(conn.tenant_id)},
+            )
+        job = db.get(SyncJob, job_id)
+        conn = db.get(Connection, job.connection_id) if job and job.connection_id else None
+        if not job or not conn:
+            raise RuntimeError("Drive sync job or connection missing after deletion pass")
+
         job.status = SyncJobStatus.succeeded
         job.finished_at = utcnow()
         conn.status = ConnectionStatus.connected
@@ -182,6 +207,26 @@ def _run_drive_sync(
             conn.last_error_at = utcnow()
         db.commit()
         raise
+
+
+def _tombstone_missing_drive_docs(
+    db: Session, *, search: Any, conn: Connection, listed_ids: set[str]
+) -> int:
+    live = db.scalars(
+        select(Document).where(
+            Document.tenant_id == conn.tenant_id,
+            Document.source == "google_drive",
+            Document.connection_id == conn.id,
+            Document.deleted_at.is_(None),
+        )
+    ).all()
+    missing = missing_external_ids((d.external_id for d in live if d.external_id), listed_ids)
+    if not missing:
+        return 0
+    docs = [d for d in live if d.external_id in missing]
+    return tombstone_many(
+        db, search, docs, reason=REASON_SOURCE_REMOVED, log_operation="drive_sync"
+    )
 
 
 def _list_files_for_folders(
@@ -342,16 +387,26 @@ def _upsert_drive_file(
 ) -> Optional[Document]:
     external_id = str(file_meta["id"])
     modified = str(file_meta.get("modifiedTime") or "")
+    # Include deleted rows, preferring a live one. A document the user deleted by
+    # hand must stay deleted; one we hid because the file left Drive is revived
+    # (same row, no duplicate) when the file returns.
     existing = db.scalar(
         select(Document)
         .where(
             Document.tenant_id == conn.tenant_id,
             Document.source == "google_drive",
             Document.external_id == external_id,
-            Document.deleted_at.is_(None),
         )
+        .order_by(Document.deleted_at.is_(None).desc(), Document.created_at.desc())
+        .limit(1)
         .options(selectinload(Document.grants), selectinload(Document.group_grants))
     )
+    if existing is not None and existing.deleted_at is not None:
+        if existing.deleted_reason == REASON_MANUAL:
+            return None
+        existing.deleted_at = None
+        existing.deleted_reason = None
+        existing.status = DocumentStatus.pending
     prev_modified = ((conn.config or {}).get("file_cursors") or {}).get(external_id)
     content_unchanged = (
         existing and prev_modified and prev_modified == modified and existing.status == DocumentStatus.ready

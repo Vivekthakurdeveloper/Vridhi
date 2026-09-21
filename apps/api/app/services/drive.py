@@ -150,13 +150,22 @@ _MOCK_OVERRIDES_PATH = Path(
 
 
 def get_mock_files(folder_id: str) -> list[dict[str, Any]]:
-    """Mock-mode file listing for `folder_id`, with any test-only permission
-    overrides from `_MOCK_OVERRIDES_PATH` applied on top of MOCK_FILES."""
-    files = [dict(f) for f in MOCK_FILES.get(folder_id) or []]
-    overrides = _read_mock_overrides().get("permissions") or {}
+    """Mock-mode file listing for `folder_id`, with any test-only overrides from
+    `_MOCK_OVERRIDES_PATH` applied on top of MOCK_FILES:
+
+    * ``permissions``  - {file_id: [permission, ...]} replaces a file's permissions
+    * ``removed``      - [file_id, ...] omits those files (simulates delete/trash)
+    * ``fail_listing`` - true makes the listing raise (simulates a Google outage)
+    """
+    overrides = _read_mock_overrides()
+    if overrides.get("fail_listing"):
+        raise RuntimeError("mock Drive listing failure (fail_listing override)")
+    removed = set(overrides.get("removed") or [])
+    permission_overrides = overrides.get("permissions") or {}
+    files = [dict(f) for f in MOCK_FILES.get(folder_id) or [] if f["id"] not in removed]
     for f in files:
-        if f["id"] in overrides:
-            f["permissions"] = overrides[f["id"]]
+        if f["id"] in permission_overrides:
+            f["permissions"] = permission_overrides[f["id"]]
     return files
 
 

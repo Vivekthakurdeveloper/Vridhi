@@ -29,7 +29,7 @@ def _dispatch_job(db, settings: Settings, storage, search, *, job_id: UUID, job_
         resolved = job.job_type.value if job and hasattr(job.job_type, "value") else (str(job.job_type) if job else "ingest")
 
     if resolved == SyncJobType.drive_sync.value or resolved == "drive_sync":
-        process_drive_sync_job(db, job_id=job_id)
+        process_drive_sync_job(db, job_id=job_id, search=search)
         return
 
     if resolved == SyncJobType.gmail_sync.value or resolved == "gmail_sync":
