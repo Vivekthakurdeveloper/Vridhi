@@ -67,6 +67,28 @@ def is_gone(message: Optional[dict[str, Any]]) -> bool:
     return message is None or has_excluded_label(message)
 
 
+def partition_added(
+    added_ids: Iterable[str], fetched: dict[str, Optional[dict[str, Any]]]
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Split History's "added" ids using the messages as actually fetched.
+
+    History alone can be wrong (e.g. a Spam -> Trash move is reported as
+    labelsAdded TRASH + labelsRemoved SPAM, which reads as "added"), so the
+    fetched state is authoritative: a message that is gone, or now in Spam/Trash,
+    is returned as removed instead of being ingested. Returns
+    (messages to ingest in id order, ids to treat as removed).
+    """
+    to_ingest: list[dict[str, Any]] = []
+    removed: set[str] = set()
+    for mid in sorted(added_ids):
+        message = fetched.get(mid)
+        if is_gone(message):
+            removed.add(mid)
+        else:
+            to_ingest.append(message)  # type: ignore[arg-type]
+    return to_ingest, removed
+
+
 def message_id_from_external_id(external_id: str) -> str:
     """Gmail documents use external_id ``"<message_id>:<attachment_id>"``."""
     return external_id.split(":", 1)[0]

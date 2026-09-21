@@ -47,10 +47,10 @@ from app.security import (
 from app.services.gmail import GmailService, get_mock_history, get_mock_messages
 from app.services.gmail_history import (
     HistoryChanges,
-    has_excluded_label,
     interpret_history,
     is_gone,
     message_id_from_external_id,
+    partition_added,
 )
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
@@ -153,6 +153,7 @@ def _run_gmail_sync(
                 logger.info("gmail.history_expired", extra={"operation": "gmail_sync"})
                 changes = None
         listed_message_ids: Optional[set[str]] = None
+        extra_removed: set[str] = set()
         if changes is None:
             # Full pass. Take the checkpoint BEFORE listing so any mail that
             # arrives while we list is replayed by the next incremental run.
@@ -160,13 +161,13 @@ def _run_gmail_sync(
             messages = _list_messages(gmail, settings, conn, query)
             listed_message_ids = {str(m["id"]) for m in messages}
         else:
-            messages = [
-                m
-                for m in (_fetch_message(gmail, conn, mid) for mid in sorted(changes.added))
-                # History covers the whole mailbox; messages.list (the full pass)
-                # leaves out Spam and Trash, so do the same here.
-                if m is not None and not has_excluded_label(m)
-            ]
+            # History covers the whole mailbox and can misreport (e.g. a
+            # Spam -> Trash move reads as "added"), while messages.list (the
+            # full pass) leaves out Spam and Trash. So the fetched message is
+            # authoritative: gone or Spam/Trash-labelled ones are hidden, not
+            # ingested.
+            fetched = {mid: _fetch_message(gmail, conn, mid) for mid in changes.added}
+            messages, extra_removed = partition_added(changes.added, fetched)
 
         # progress_total counts attachments, not messages — it is what the UI
         # renders as "n of m", and a message may carry several attachments.
@@ -223,7 +224,7 @@ def _run_gmail_sync(
         deletions_ok = True
         if changes is not None:
             deletions_ok = _tombstone_gmail_messages(
-                db, search=search, conn=conn, message_ids=changes.removed
+                db, search=search, conn=conn, message_ids=changes.removed | extra_removed
             )
         elif listed_message_ids is not None and query == settings.gmail_query:
             deletions_ok = _tombstone_gmail_unlisted(

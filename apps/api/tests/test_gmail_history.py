@@ -6,6 +6,7 @@ from app.services.gmail_history import (
     interpret_history,
     is_gone,
     message_id_from_external_id,
+    partition_added,
 )
 
 
@@ -140,3 +141,49 @@ def test_removing_the_spam_label_counts_as_added_again():
         ]
     )
     assert ch.added == {"a"} and ch.removed == set()
+
+
+def _msg(mid, *labels):
+    return {"id": mid, "labelIds": list(labels)}
+
+
+def test_partition_added_empty():
+    assert partition_added(set(), {}) == ([], set())
+
+
+def test_partition_added_missing_message_is_removed():
+    assert partition_added({"a"}, {"a": None}) == ([], {"a"})
+
+
+def test_partition_added_trash_and_spam_are_removed():
+    fetched = {"t": _msg("t", "TRASH"), "s": _msg("s", "INBOX", "SPAM")}
+    assert partition_added({"t", "s"}, fetched) == ([], {"t", "s"})
+
+
+def test_partition_added_normal_and_draft_are_ingested_in_id_order():
+    fetched = {"b": _msg("b", "INBOX"), "a": _msg("a", "DRAFT")}
+    messages, removed = partition_added({"b", "a"}, fetched)
+    assert [m["id"] for m in messages] == ["a", "b"] and removed == set()
+
+
+def test_partition_added_mixed():
+    fetched = {"ok": _msg("ok", "INBOX"), "gone": None, "bin": _msg("bin", "TRASH")}
+    messages, removed = partition_added({"ok", "gone", "bin"}, fetched)
+    assert [m["id"] for m in messages] == ["ok"] and removed == {"gone", "bin"}
+
+
+def test_spam_to_trash_move_ends_up_removed():
+    # Gmail reports Spam -> Trash as labelsAdded [TRASH] + labelsRemoved [SPAM]
+    # in one record; the history alone says "added", the fetched labels decide.
+    ch = interpret_history(
+        [
+            {
+                "id": "1",
+                "labelsAdded": [{**_m("m"), "labelIds": ["TRASH"]}],
+                "labelsRemoved": [{**_m("m"), "labelIds": ["SPAM"]}],
+            }
+        ]
+    )
+    assert ch.added == {"m"} and ch.removed == set()
+    messages, extra_removed = partition_added(ch.added, {"m": _msg("m", "TRASH")})
+    assert messages == [] and (ch.removed | extra_removed) == {"m"}
