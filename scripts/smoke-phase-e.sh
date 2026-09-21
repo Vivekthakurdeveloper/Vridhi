@@ -130,14 +130,17 @@ echo "$search" | grep -qi "penny drop" || {
   exit 1
 }
 
-echo "== incremental re-sync skips everything =="
+echo "== incremental re-sync re-ingests nothing =="
+# With a saved Gmail History checkpoint an incremental run reads only what
+# changed, so an unchanged mailbox yields no attachments at all and nothing is
+# counted as skipped. The invariant is that nothing is re-ingested.
 job2=$(start_sync true)
 wait_for_job "$job2" "incremental re-sync"
 done2=$(job_field progress_done)
 skip2=$(job_field progress_skipped)
 echo "  done=$done2 skipped=$skip2"
 [[ "$done2" == "0" ]] || { echo "FAIL: incremental re-sync re-ingested $done2 attachment(s)"; exit 1; }
-[[ "$skip2" == "3" ]] || { echo "FAIL: expected 3 skips on re-sync, got $skip2"; exit 1; }
+[[ "$skip2" =~ ^[0-3]$ ]] || { echo "FAIL: unexpected skip count on re-sync: $skip2"; exit 1; }
 
 echo "== incremental=false forces re-sync =="
 # Regression guard: Drive's equivalent flag is a no-op because it consults its

@@ -13,9 +13,13 @@ Two deliberate differences from Drive:
   equivalent consults `file_cursors` unconditionally, which makes
   `incremental: false` a no-op there; that bug is not reproduced here.
 
-Known limitation: `message_cursors` grows unbounded in `connections.config`
-JSONB, one key per synced attachment. Gmail's `historyId` API is the correct
-fix and is deferred to a later phase.
+Change tracking: `connection.config["gmail_history_id"]` is a Gmail History
+checkpoint. The first run does a full pass and stores it; later incremental
+runs read only what changed via `users.history.list` and hide attachments of
+deleted/trashed messages.
+
+Known limitation: `message_cursors` still grows unbounded in
+`connections.config` JSONB, one key per synced attachment.
 """
 
 from __future__ import annotations
