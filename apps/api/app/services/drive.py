@@ -69,6 +69,123 @@ MOCK_FILES = {
                 "Vendor contracts renew automatically unless cancelled 30 days prior.\n"
                 "Liability cap is INR 50,00,000 per incident.\n"
             ),
+        },
+        {
+            # Phase I smoke fixture: a real multi-tab .xlsx (built with
+            # openpyxl, base64-encoded) proving Task 3's multi-tab Sheets
+            # support -- worker/pipeline/process.py's _parse_xlsx walks every
+            # worksheet, not just the first, so text unique to the SECOND tab
+            # ("Details") is indexed and searchable. Named/typed as a plain
+            # .xlsx rather than a `google-apps.spreadsheet` fixture because
+            # mock mode's _download_file_bytes (services/drive.py) returns
+            # file_meta["mimeType"] as-is -- it doesn't perform the
+            # export-mimeType translation that only the live Google export
+            # path does -- so a fixture claiming the Google mime would be
+            # misclassified by classify_document. A real spreadsheet's
+            # multi-tab export is instead covered live (see ARCHITECTURE_NOTES.md).
+            "id": "file-multitab-sheet",
+            "name": "Quarterly Tabs.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "webViewLink": "https://drive.google.com/file/d/file-multitab-sheet/view",
+            "modifiedTime": "2025-04-01T09:00:00Z",
+            "permissions": [{"type": "domain", "role": "reader"}],
+            "content_b64": (
+                "UEsDBBQAAAAIAIY8Nl1Gx01IlQAAAM0AAAAQAAAAZG9jUHJvcHMvYXBwLnhtbE3PTQvCMAwG4L9S"
+                "dreZih6kDkQ9ip68zy51hbYpbYT67+0EP255ecgboi6JIia2mEXxLuRtMzLHDUDWI/o+y8qhiqHk"
+                "e64x3YGMsRoPpB8eA8OibdeAhTEMOMzit7Dp1C5GZ3XPlkJ3sjpRJsPiWDQ6sScfq9wcChDneiU+"
+                "ixNLOZcrBf+LU8sVU57mym/8ZAW/B7oXUEsDBBQAAAAIAIY8Nl1/Br9Y7gAAACsCAAARAAAAZG9j"
+                "UHJvcHMvY29yZS54bWzNksFKxDAQhl9Fcm8nTaFi6Pay4klBcEHxFpLZ3WDThGSk3be3jbtdRB/A"
+                "Y2b+fPMNTKuD1D7ic/QBI1lMN5PrhyR12LAjUZAASR/RqVTOiWFu7n10iuZnPEBQ+kMdEATnDTgk"
+                "ZRQpWIBFWImsa42WOqIiH894o1d8+Ix9hhkN2KPDgRJUZQWsWyaG09S3cAUsMMLo0ncBzUrM1T+x"
+                "uQPsnJySXVPjOJZjnXPzDhW8PT2+5HULOyRSg8b5V7KSTgE37DL5td7e7x5YJ7hoCn5XCLHjt7Ju"
+                "ZFW/L64//K7Czhu7t//Y+CLYtfDrLrovUEsDBBQAAAAIAIY8Nl2ZXJwjEAYAAJwnAAATAAAAeGwv"
+                "dGhlbWUvdGhlbWUxLnhtbO1aW3PaOBR+76/QeGf2bQvGNoG2tBNzaXbbtJmE7U4fhRFYjWx5ZJGE"
+                "f79HNhDLlg3tkk26mzwELOn7zkVH5+g4efPuLmLohoiU8nhg2S/b1ru3L97gVzIkEUEwGaev8MAK"
+                "pUxetVppAMM4fckTEsPcgosIS3gUy9Zc4FsaLyPW6rTb3VaEaWyhGEdkYH1eLGhA0FRRWm9fILTl"
+                "HzP4FctUjWWjARNXQSa5iLTy+WzF/NrePmXP6TodMoFuMBtYIH/Ob6fkTlqI4VTCxMBqZz9Wa8fR"
+                "0kiAgsl9lAW6Sfaj0xUIMg07Op1YznZ89sTtn4zK2nQ0bRrg4/F4OLbL0otwHATgUbuewp30bL+k"
+                "QQm0o2nQZNj22q6RpqqNU0/T933f65tonAqNW0/Ta3fd046Jxq3QeA2+8U+Hw66JxqvQdOtpJif9"
+                "rmuk6RZoQkbj63oSFbXlQNMgAFhwdtbM0gOWXin6dZQa2R273UFc8FjuOYkR/sbFBNZp0hmWNEZy"
+                "nZAFDgA3xNFMUHyvQbaK4MKS0lyQ1s8ptVAaCJrIgfVHgiHF3K/99Ze7yaQzep19Os5rlH9pqwGn"
+                "7bubz5P8c+jkn6eT101CznC8LAnx+yNbYYcnbjsTcjocZ0J8z/b2kaUlMs/v+QrrTjxnH1aWsF3P"
+                "z+SejHIju932WH32T0duI9epwLMi15RGJEWfyC265BE4tUkNMhM/CJ2GmGpQHAKkCTGWoYb4tMas"
+                "EeATfbe+CMjfjYj3q2+aPVehWEnahPgQRhrinHPmc9Fs+welRtH2Vbzco5dYFQGXGN80qjUsxdZ4"
+                "lcDxrZw8HRMSzZQLBkGGlyQmEqk5fk1IE/4rpdr+nNNA8JQvJPpKkY9psyOndCbN6DMawUavG3WH"
+                "aNI8ev4F+Zw1ChyRGx0CZxuzRiGEabvwHq8kjpqtwhErQj5iGTYacrUWgbZxqYRgWhLG0XhO0rQR"
+                "/FmsNZM+YMjszZF1ztaRDhGSXjdCPmLOi5ARvx6GOEqa7aJxWAT9nl7DScHogstm/bh+htUzbCyO"
+                "90fUF0rkDyanP+kyNAejmlkJvYRWap+qhzQ+qB4yCgXxuR4+5Xp4CjeWxrxQroJ7Af/R2jfCq/iC"
+                "wDl/Ln3Ppe+59D2h0rc3I31nwdOLW95GblvE+64x2tc0LihjV3LNyMdUr5Mp2DmfwOz9aD6e8e36"
+                "2SSEr5pZLSMWkEuBs0EkuPyLyvAqxAnoZFslCctU02U3ihKeQhtu6VP1SpXX5a+5KLg8W+Tpr6F0"
+                "PizP+Txf57TNCzNDt3JL6raUvrUmOEr0scxwTh7LDDtnPJIdtnegHTX79l125COlMFOXQ7gaQr4D"
+                "bbqd3Do4npiRuQrTUpBvw/npxXga4jnZBLl9mFdt59jR0fvnwVGwo+88lh3HiPKiIe6hhpjPw0OH"
+                "eXtfmGeVxlA0FG1srCQsRrdguNfxLBTgZGAtoAeDr1EC8lJVYDFbxgMrkKJ8TIxF6HDnl1xf49GS"
+                "49umZbVuryl3GW0iUjnCaZgTZ6vK3mWxwVUdz1Vb8rC+aj20FU7P/lmtyJ8MEU4WCxJIY5QXpkqi"
+                "8xlTvucrScRVOL9FM7YSlxi84+bHcU5TuBJ2tg8CMrm7Oal6ZTFnpvLfLQwJLFuIWRLiTV3t1eeb"
+                "nK56Inb6l3fBYPL9cMlHD+U751/0XUOufvbd4/pukztITJx5xREBdEUCI5UcBhYXMuRQ7pKQBhMB"
+                "zZTJRPACgmSmHICY+gu98gy5KRXOrT45f0Usg4ZOXtIlEhSKsAwFIRdy4+/vk2p3jNf6LIFthFQy"
+                "ZNUXykOJwT0zckPYVCXzrtomC4Xb4lTNuxq+JmBLw3punS0n/9te1D20Fz1G86OZ4B6zh3OberjC"
+                "Raz/WNYe+TLfOXDbOt4DXuYTLEOkfsF9ioqAEativrqvT/klnDu0e/GBIJv81tuk9t3gDHzUq1ql"
+                "ZCsRP0sHfB+SBmOMW/Q0X48UYq2msa3G2jEMeYBY8wyhZjjfh0WaGjPVi6w5jQpvQdVA5T/b1A1o"
+                "9g00HJEFXjGZtjaj5E4KPNz+7w2wwsSO4e2LvwFQSwMEFAAAAAgAhjw2XU7gOK5uAQAAwwIAABgA"
+                "AAB4bC93b3Jrc2hlZXRzL3NoZWV0MS54bWx1Ul1vwjAM/CtR3iEUiQ2hthJlmkBiEoON8RqoSyPy"
+                "0SWGbv9+SYGKTeMpPud8ZzuJa2MPrgRA8qWkdgktEasRY25XguKuayrQ/qYwVnH00O6ZqyzwvClS"
+                "kvV7vQemuNA0jZvcwqaxOaIUGhaWuKNS3H5nIE2d0IheE0uxLzEkWBpXfA8rwPdqYT1irUouFGgn"
+                "jCYWioSOo1HWD/yGsBZQu5uYhEm2xhwCmOUJ7YWGQMIOgwL3xwkmIGUQ8m18XjRpaxkKb+Or+nMz"
+                "u59lyx1MjPwQOZYJHVKSQ8GPEpemnsJlnkHb4BNHnsbW1MSGOdN4F4Lg7XlCh/2s0Pq88EaYzhBU"
+                "zNA3EDDbXfjZPf6ayyP8LmDerHXst479OwqvEVnCCfRfmbPvvarNfLV5G2dRZzxfTMedKBr+1wS7"
+                "WUF43hdu90I7IqHwqr3u44ASe17ZGaCpmu+xNYhGNWHpfxnYQPD3hTF4BeHF2n+b/gBQSwMEFAAA"
+                "AAgAhjw2XWCrF+RxAQAAfgIAABgAAAB4bC93b3Jrc2hlZXRzL3NoZWV0Mi54bWx1UsFu2zAM/RVB"
+                "91apsXZFYRtIOgwrsHVB0nW9KjYdC5FEj2Lm9e9HuamRw3YwzEeRj+9RKkekQ+oBWP0JPqZK98zD"
+                "nTGp6SHYdIkDRDnpkIJlgbQ3aSCw7dQUvCkWixsTrIu6LqfcmuoSj+xdhDWpdAzB0usKPI6VvtLv"
+                "iY3b95wTpi4Hu4ct8I9hTYLMzNK6ADE5jIqgq/Ty6m5Z5Pqp4NnBmM5ilZ3sEA8ZPLSVXmRB4KHh"
+                "zGDl9xvuwftMJDJ+nTj1PDI3nsfv7J8n7+JlZxPco//pWu4rfatVC509et7g+AVOfq5ngZ8s27ok"
+                "HBVln3XZ5CDPljoX8362TJJ3MojrR2QoDYuAjE0jn/TOBMVMUPyHYAsNxlax3SlZ8AFIvXzdvjwt"
+                "V8XFarN8/n5RFB+UlyUkhdG/qh7onwPNmfp8M98s7V1MykMncxeXH6+1oje3b4BxmG52h8wYprCX"
+                "BwKUC+S8Q7F2AnnZ85Or/wJQSwMEFAAAAAgAhjw2XXzzo9xRAgAA9gkAAA0AAAB4bC9zdHlsZXMu"
+                "eG1s3VbbitswEP0V4Q+ok5g1cUnyUENgoS0Luw99VWI5EejiyvKS9Os7Izl2s6tZKH2rTfDMHJ25"
+                "G2fT+6sSz2chPLtoZfptdva++5zn/fEsNO8/2U4YQFrrNPegulPed07wpkeSVvlqsShzzaXJdhsz"
+                "6L32PTvawfhttsjy3aa1ZrYss2iAo1wL9srVNqu5kgcnw1mupbpG8woNR6usYx5SEUgGS/8rwsuo"
+                "YZajHy2NdWjMY4Tw6MGpVGpKYJVFw27Tce+FM3tQAicY30FslF+uHWRwcvy6XD1kMyE8IMjBuka4"
+                "uzqjabdRovVAcPJ0xqe3XY6g91aD0Eh+soaHHG6MUQC3R6HUM47oR3vn+9Ky2OvHBtvMsNSbCAmN"
+                "YnQTFfT/p7fo+5/dsk6+Wv9lgGpM0H8O1osnJ1p5CfqlvY8/hQ6J3EWfrAyXY5t9x51Tswt2GKTy"
+                "0ozaWTaNMO9qA/eeH2Cp7/zD+Ua0fFD+ZQK32Sx/E40cdDWdesKyxlOz/BVnuCynzYRY0jTiIpp6"
+                "VN3pEEQGAkQdLyS8RfbhSiMUJ2JpBDEqDpUBxYksKs7/VM+arCdiVG7rJLImOWuSE1kppA43FSfN"
+                "qeBKV1pVRVGWVEfrOplBTfWtLPGX9kblhgwqDkb6u17T06Y35OM9oGb60YZQldKbSFVK9xqRdN+Q"
+                "UVXpaVNxkEFNgdodjJ+OgzuV5hQFTpXKjXqDaaSqKAR3Mb2jZUl0p8Q7PR/qLSmKqkojiKUzKAoK"
+                "wbeRRqgMMAcKKYrwHXzzPcpv36l8/qe3+w1QSwMEFAAAAAgAhjw2XZeKuxzAAAAAEwIAAAsAAABf"
+                "cmVscy8ucmVsc52SuW7DMAxAf8XQnjAH0CGIM2XxFgT5AVaiD9gSBYpFnb+v2qVxkAsZeT08Etwe"
+                "aUDtOKS2i6kY/RBSaVrVuAFItiWPac6RQq7ULB41h9JARNtjQ7BaLD5ALhlmt71kFqdzpFeIXNed"
+                "pT3bL09Bb4CvOkxxQmlISzMO8M3SfzL38ww1ReVKI5VbGnjT5f524EnRoSJYFppFydOiHaV/Hcf2"
+                "kNPpr2MitHpb6PlxaFQKjtxjJYxxYrT+NYLJD+x+AFBLAwQUAAAACACGPDZdGscsA0gBAACxAgAA"
+                "DwAAAHhsL3dvcmtib29rLnhtbLVS0WrDMAz8leAPWNKwFVaavqxsK4ytrKPvTqI0orYVZKVd+/Vz"
+                "EsICg7GXPck6ifPd2csz8TEnOkaf1jifqVqkWcSxL2qw2t9QAy5MKmKrJbR8iH3DoEtfA4g1cZok"
+                "89hqdGq1HLm2HE8bEigEyQWwA/YIZ/8979rohB5zNCiXTPVnAyqy6NDiFcpMJSryNZ2fifFKTrTZ"
+                "FUzGZGo2DPbAgsUPeNeJ/NC57xHR+bsOQjI1TwJhheyl3+j5ddB4grA8dK3QIxoBXmuBJ6a2QXfo"
+                "aIKLeGKjz2GsQ4gL/kuMVFVYwJqK1oKTIUcG0wl0vsbGq8hpC5natdZqvnSOwhWbcnAnQdYkK15g"
+                "GPCm7AX+n5g1iEbjJ2LSX8SkfVpjRCVU6KB8DUQ+4OG5ii1HXelNpbd3s/vwLK0xDwF7cy+kyzHx"
+                "8besvgBQSwMEFAAAAAgAhjw2XY33LFq0AAAAiQIAABoAAAB4bC9fcmVscy93b3JrYm9vay54bWwu"
+                "cmVsc8WSTQqDMBBGrxJygI7a0kVRV924LV4g6PiD0YTMlOrta3WhgS66ka7CNyHvezCJH6gVt2ag"
+                "prUkxl4PlMiG2d4AqGiwV3QyFof5pjKuVzxHV4NVRadqhCgIruD2DJnGe6bIJ4u/EE1VtQXeTfHs"
+                "ceAvYHgZ11GDyFLkytXIiYRRb2OC5QhPM1mKrEyky8pQwr+FIk8oOlCIeNJIm82avfrzgfU8v8Wt"
+                "fYnr0N/J5eMA3s9L31BLAwQUAAAACACGPDZdbqckvB4BAABXBAAAEwAAAFtDb250ZW50X1R5cGVz"
+                "XS54bWzFlM9OwzAMxl+lynVqMnbggNZdgCvswAuE1l2j5p9ib3Rvj9tuk0CjYioSl0aN7e/n+Iuy"
+                "fjtGwKxz1mMhGqL4oBSWDTiNMkTwHKlDcpr4N+1U1GWrd6BWy+W9KoMn8JRTryE26yeo9d5S9tzx"
+                "NprgC5HAosgex8SeVQgdozWlJo6rg6++UfITQXLlkIONibjgBKGuEvrIz4BT3esBUjIVZFud6EU7"
+                "zlKdVUhHCyinJa70GOralFCFcu+4RGJMoCtsAMhZOYoupsnEE4bxezebP8hMATlzm0JEdizB7biz"
+                "JX11HlkIEpnpI16ILD37fNC7XUH1SzaP9yOkdvAD1bDMn/FXjy/6N/ax+sc+3kNo//qq96t02vgz"
+                "Xw3vyeYTUEsBAhQDFAAAAAgAhjw2XUbHTUiVAAAAzQAAABAAAAAAAAAAAAAAAIABAAAAAGRvY1By"
+                "b3BzL2FwcC54bWxQSwECFAMUAAAACACGPDZdfwa/WO4AAAArAgAAEQAAAAAAAAAAAAAAgAHDAAAA"
+                "ZG9jUHJvcHMvY29yZS54bWxQSwECFAMUAAAACACGPDZdmVycIxAGAACcJwAAEwAAAAAAAAAAAAAA"
+                "gAHgAQAAeGwvdGhlbWUvdGhlbWUxLnhtbFBLAQIUAxQAAAAIAIY8Nl1O4DiubgEAAMMCAAAYAAAA"
+                "AAAAAAAAAACAgSEIAAB4bC93b3Jrc2hlZXRzL3NoZWV0MS54bWxQSwECFAMUAAAACACGPDZdYKsX"
+                "5HEBAAB+AgAAGAAAAAAAAAAAAAAAgIHFCQAAeGwvd29ya3NoZWV0cy9zaGVldDIueG1sUEsBAhQD"
+                "FAAAAAgAhjw2XXzzo9xRAgAA9gkAAA0AAAAAAAAAAAAAAIABbAsAAHhsL3N0eWxlcy54bWxQSwEC"
+                "FAMUAAAACACGPDZdl4q7HMAAAAATAgAACwAAAAAAAAAAAAAAgAHoDQAAX3JlbHMvLnJlbHNQSwEC"
+                "FAMUAAAACACGPDZdGscsA0gBAACxAgAADwAAAAAAAAAAAAAAgAHRDgAAeGwvd29ya2Jvb2sueG1s"
+                "UEsBAhQDFAAAAAgAhjw2XY33LFq0AAAAiQIAABoAAAAAAAAAAAAAAIABRhAAAHhsL19yZWxzL3dv"
+                "cmtib29rLnhtbC5yZWxzUEsBAhQDFAAAAAgAhjw2XW6nJLweAQAAVwQAABMAAAAAAAAAAAAAAIAB"
+                "MhEAAFtDb250ZW50X1R5cGVzXS54bWxQSwUGAAAAAAoACgCEAgAAgRIAAAAA"
+            ),
         }
     ],
     "folder-hr": [
@@ -84,7 +201,28 @@ MOCK_FILES = {
                 "Employees receive 18 days of paid leave per calendar year.\n"
                 "Leave requests require manager approval within 3 business days.\n"
             ),
-        }
+        },
+        {
+            # Phase I smoke fixture: an old-format Word file for worker/
+            # pipeline/process.py's `catdoc` path (see _parse_legacy_office).
+            # These raw bytes are not a real OLE2 .doc -- constructing a
+            # genuinely valid legacy .doc requires an OLE2 compound-file
+            # writer that isn't available in this image (no LibreOffice/
+            # antiword/olefile). catdoc falls back to reading non-OLE input
+            # as plain text and exits 0, so the marker word below survives
+            # and is searchable -- proving the pipeline calls catdoc and
+            # indexes its (real) stdout, which is what this scenario needs.
+            "id": "file-legacy-memo",
+            "name": "Legacy Memo.doc",
+            "mimeType": "application/msword",
+            "webViewLink": "https://drive.google.com/file/d/file-legacy-memo/view",
+            "modifiedTime": "2025-04-01T09:00:00Z",
+            "permissions": [{"type": "domain", "role": "reader"}],
+            "content_b64": (
+                "TGVnYWN5IG9mZmljZSBtZW1vIHBsYWNlaG9sZGVyLiBNYXJrZXIgd29yZCBDQVRET0NNQVJLRVIt"
+                "NzczMSBhcHBlYXJzIG9uY2UgZm9yIHNlYXJjaC4="
+            ),
+        },
     ],
     "folder-finance": [
         {
@@ -101,6 +239,32 @@ MOCK_FILES = {
                 "Finance SOP.\n"
                 "GST invoice must be issued within 7 days of payment receipt.\n"
                 "Professional plan is priced at INR 24,999 per month billed annually.\n"
+            ),
+        },
+        {
+            # Phase I (Drive completeness) smoke fixture: a real in-memory ZIP
+            # (built with Python's zipfile, base64-encoded) containing two
+            # inner text files -- Reports/Leave.txt and Contracts/NDA.txt.
+            # Exercises worker/drive_sync.py's _upsert_drive_zip: each inner
+            # file becomes its own Document, cited by "<zip name> / <inner
+            # path>". See scripts/smoke-phase-i.sh. Its content can be
+            # swapped mid-run via the "content_b64" mock override (below) to
+            # simulate the zip shrinking to fewer inner files.
+            "id": "file-mock-zip",
+            "name": "Reports Bundle.zip",
+            "mimeType": "application/zip",
+            "webViewLink": "https://drive.google.com/file/d/file-mock-zip/view",
+            "modifiedTime": "2025-04-01T09:00:00Z",
+            "permissions": [{"type": "domain", "role": "reader"}],
+            "content_b64": (
+                "UEsDBBQAAAAAANY7Nl1kPmpyXAAAAFwAAAARAAAAUmVwb3J0cy9MZWF2ZS50eHRaSVAgaW5uZXIg"
+                "TGVhdmUgZG9jLgpFbXBsb3llZXMgZ2V0IDIxIGRheXMgYW5udWFsIGxlYXZlIHVuZGVyIHRoZSBa"
+                "SVBURVNULUxFQVZFLTlGMyBwb2xpY3kuClBLAwQUAAAAAADWOzZdHn/fzk4AAABOAAAAEQAAAENv"
+                "bnRyYWN0cy9OREEudHh0WklQIGlubmVyIE5EQSBkb2MuCk11dHVhbCBjb25maWRlbnRpYWxpdHkg"
+                "YXBwbGllcyBwZXIgY2xhdXNlIFpJUFRFU1QtTkRBLTdLMi4KUEsBAhQDFAAAAAAA1js2XWQ+anJc"
+                "AAAAXAAAABEAAAAAAAAAAAAAAIABAAAAAFJlcG9ydHMvTGVhdmUudHh0UEsBAhQDFAAAAAAA1js2"
+                "XR5/385OAAAATgAAABEAAAAAAAAAAAAAAIABiwAAAENvbnRyYWN0cy9OREEudHh0UEsFBgAAAAAC"
+                "AAIAfgAAAAgBAAAAAA=="
             ),
         },
         {
@@ -174,16 +338,23 @@ def get_mock_files(folder_id: str) -> list[dict[str, Any]]:
     * ``permissions``  - {file_id: [permission, ...]} replaces a file's permissions
     * ``removed``      - [file_id, ...] omits those files (simulates delete/trash)
     * ``fail_listing`` - true makes the listing raise (simulates a Google outage)
+    * ``content_b64``  - {file_id: base64 string} replaces a file's content_b64,
+      e.g. simulating a ZIP shrinking to fewer inner entries between two syncs
+      (see scripts/smoke-phase-i.sh scenario 2's "lighter case") without
+      needing a real Google file to actually change.
     """
     overrides = _read_mock_overrides()
     if overrides.get("fail_listing"):
         raise RuntimeError("mock Drive listing failure (fail_listing override)")
     removed = set(overrides.get("removed") or [])
     permission_overrides = overrides.get("permissions") or {}
+    content_overrides = overrides.get("content_b64") or {}
     files = [dict(f) for f in MOCK_FILES.get(folder_id) or [] if f["id"] not in removed]
     for f in files:
         if f["id"] in permission_overrides:
             f["permissions"] = permission_overrides[f["id"]]
+        if f["id"] in content_overrides:
+            f["content_b64"] = content_overrides[f["id"]]
     return files
 
 

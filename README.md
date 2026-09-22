@@ -194,6 +194,34 @@ The smoke needs `GOOGLE_DRIVE_MODE=mock` and `GMAIL_MODE=mock` on the api and
 worker (`docker-compose.yml` defaults both to `oauth`, so flip them locally
 first).
 
+## Phase I — Drive completeness (ZIPs, old Office formats, multi-tab Sheets, Shared Drives)
+
+Closes the biggest remaining Drive-connector gaps: a ZIP is expanded so each
+supported inner file is indexed and cited by its own name; legacy `.doc` /
+`.xls` / `.ppt` files are read via `catdoc`/`xls2csv`/`catppt`; every tab of a
+Google Sheet is indexed, not just the first; and Shared Drives (and their
+folders) are selectable and synced the same way My Drive folders are.
+
+- **ZIP:** one Document per supported inner file, external id
+  `"<zip_id>::<inner path>"`, cited by `"<zip name> / <inner path>"`. Removing
+  the whole ZIP or just one inner entry (a changed archive) hides exactly what
+  left, on the next sync — same tombstone path as any other removed file.
+- **Old Office formats:** `.doc`/`.xls`/`.ppt` are piped through
+  `catdoc`/`xls2csv`/`catppt` (installed in the worker image); a modern
+  `.docx`/`.xlsx`/`.pptx` is never misrouted to the legacy reader even if the
+  Drive-reported mime is stale.
+- **Multi-tab Sheets:** every worksheet is walked and indexed, not just the
+  first.
+- **Shared Drives:** listed and selectable alongside My Drive folders; files
+  in a Shared Drive sync exactly like a regular folder's files.
+- **Scope cut (accepted for this phase):** ZIP expansion has no enforced
+  size/entry/nesting limit — see ARCHITECTURE_NOTES.md.
+
+```bash
+docker compose up --build
+API_URL=http://localhost:8000 ./scripts/smoke-phase-i.sh
+```
+
 ## Smoke tests
 
 ```bash
@@ -205,4 +233,5 @@ API_URL=http://localhost:8000 ./scripts/smoke-phase-e.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-g.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-h.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-i.sh
 ```

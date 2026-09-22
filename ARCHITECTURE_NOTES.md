@@ -417,6 +417,8 @@ Ordered by how much damage they'd do.
 - The frontend is a Figma Make export (`frontend/AGENTS.md`, `package.json` name `figma-make-app`, `vite.config.ts` full of `figma*` plugins). It's a scaffold that happens to contain the real app — expect friction if you restructure it.
 - No worker tests, no frontend tests, no CI job for either. API CI runs 5 unit tests that touch none of the ACL, retrieval, or ingest logic.
 
+**13. ZIP expansion has no size/entry/nesting limits (Piece 4A scope cut, approved 2026-09-22).** `services/zip_expand.py` enforces path safety (zip-slip) but nothing else: a ZIP with an enormous entry, thousands of entries, or nested archives is expanded in full, in memory, on the worker, with no per-archive byte/count cap and no recursion into nested ZIPs (a `.zip` inside a `.zip` is skipped — `classify_document` doesn't recognize it — rather than expanded). A very large or maliciously crafted ZIP can consume excessive worker memory or time; there is also no corrupt-ZIP-specific error message beyond the generic "could not read zip" failure. Covered end-to-end (expansion, per-inner-file citation, partial and whole-ZIP removal) by `scripts/smoke-phase-i.sh`. Revisit before this is exposed to untrusted or general-availability traffic.
+
 ### If I were picking up the first ticket
 
 Fix #3 (one authorization rule, three implementations) — index cleanup on delete (#1) used to be the obvious first ticket and is now done, and #3 is the next best way to learn this codebase: any change to visibility semantics forces you to touch all three and extend `test_acl_agreement.py`.
