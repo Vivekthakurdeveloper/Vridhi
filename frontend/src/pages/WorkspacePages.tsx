@@ -751,22 +751,35 @@ export function ConnectionsPage() {
           ) : null}
 
           <div className="drive-folders">
-            {folders.map((folder) => {
-              const checked = selectedFolders.includes(folder.id)
-              return (
-                <label key={folder.id} className="folder-row">
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleFolder(folder.id)}
-                  />
-                  <span>
-                    <strong>{folder.name}</strong>
-                    <small>{folder.path}</small>
-                  </span>
-                </label>
-              )
-            })}
+            {Array.from(
+              folders.reduce((groups, folder) => {
+                const key = folder.drive_name ?? "My Drive"
+                const group = groups.get(key) ?? []
+                group.push(folder)
+                groups.set(key, group)
+                return groups
+              }, new Map<string, DriveFolder[]>())
+            ).map(([driveName, driveFolders]) => (
+              <div key={driveName} className="drive-folder-group">
+                <h4>{driveName}</h4>
+                {driveFolders.map((folder) => {
+                  const checked = selectedFolders.includes(folder.id)
+                  return (
+                    <label key={folder.id} className="folder-row">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleFolder(folder.id)}
+                      />
+                      <span>
+                        <strong>{folder.name}</strong>
+                        <small>{folder.path}</small>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            ))}
           </div>
           <button
             type="button"

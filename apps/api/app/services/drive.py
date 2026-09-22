@@ -47,6 +47,12 @@ MOCK_FOLDERS = [
     {"id": "folder-contracts", "name": "Contracts", "path": "My Drive / Contracts"},
     {"id": "folder-hr", "name": "HR Policies", "path": "My Drive / HR Policies"},
     {"id": "folder-finance", "name": "Finance", "path": "My Drive / Finance"},
+    {
+        "id": "folder-shared-legal",
+        "name": "Legal",
+        "path": "Legal (Shared Drive) / Legal",
+        "drive_name": "Legal (Shared Drive)",
+    },
 ]
 
 MOCK_FILES = {
@@ -122,6 +128,17 @@ MOCK_FILES = {
             ),
         },
     ],
+    "folder-shared-legal": [
+        {
+            "id": "file-nda-template",
+            "name": "NDA Template.txt",
+            "mimeType": "text/plain",
+            "webViewLink": "https://drive.google.com/file/d/file-nda-template/view",
+            "modifiedTime": "2025-03-01T09:00:00Z",
+            "permissions": [{"type": "domain", "role": "reader"}],
+            "content": "NDA Template.\nStandard mutual non-disclosure agreement.\n",
+        }
+    ],
 }
 
 
@@ -182,6 +199,7 @@ class DriveFolder:
     id: str
     name: str
     path: str
+    drive_name: str | None = None
 
 
 class DriveService:
@@ -457,6 +475,56 @@ class DriveService:
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
+
+        # Shared Drives: list the drives themselves, then each drive's folders.
+        drives_resp = httpx.get(
+            "https://www.googleapis.com/drive/v3/drives",
+            params={"pageSize": self.settings.drive_sync_page_size},
+            headers={"Authorization": f"Bearer {access}"},
+            timeout=30.0,
+        )
+        drives_resp.raise_for_status()
+        for shared_drive in drives_resp.json().get("drives") or []:
+            drive_id = shared_drive["id"]
+            drive_name = shared_drive.get("name") or "Shared Drive"
+            page_token = None
+            while True:
+                params = {
+                    "q": "mimeType='application/vnd.google-apps.folder' and trashed=false",
+                    "corpora": "drive",
+                    "driveId": drive_id,
+                    "includeItemsFromAllDrives": "true",
+                    "supportsAllDrives": "true",
+                    "fields": "nextPageToken, files(id, name, parents)",
+                    "pageSize": self.settings.drive_sync_page_size,
+                }
+                if page_token:
+                    params["pageToken"] = page_token
+                resp = httpx.get(
+                    "https://www.googleapis.com/drive/v3/files",
+                    params=params,
+                    headers={"Authorization": f"Bearer {access}"},
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for f in data.get("files") or []:
+                    folders.append(
+                        DriveFolder(
+                            id=f["id"],
+                            name=f.get("name") or "Untitled",
+                            path=f"{drive_name} / {f.get('name') or 'Untitled'}",
+                            drive_name=drive_name,
+                        )
+                    )
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+            # The drive itself is also a selectable "folder" (its id doubles
+            # as its root folder id).
+            folders.append(
+                DriveFolder(id=drive_id, name=drive_name, path=drive_name, drive_name=drive_name)
+            )
         return folders
 
     def save_selected_folders(self, *, tenant_id: UUID, folder_ids: list[str]) -> Connection:

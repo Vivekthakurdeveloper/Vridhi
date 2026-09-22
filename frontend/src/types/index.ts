@@ -177,6 +177,7 @@ export interface DriveFolder {
   id: string
   name: string
   path: string
+  drive_name?: string | null
 }
 
 export interface UploadResult {

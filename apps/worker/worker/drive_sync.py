@@ -346,6 +346,9 @@ def _list_files_for_folders(
                 "q": q,
                 "fields": "nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime, size)",
                 "pageSize": settings.drive_sync_page_size,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+                "corpora": "allDrives",
             }
             if page_token:
                 params["pageToken"] = page_token
@@ -367,7 +370,10 @@ def _list_files_for_folders(
                     continue
                 perm_resp = httpx.get(
                     f"https://www.googleapis.com/drive/v3/files/{f['id']}/permissions",
-                    params={"fields": "permissions(type,role,emailAddress)"},
+                    params={
+                        "fields": "permissions(type,role,emailAddress)",
+                        "supportsAllDrives": "true",
+                    },
                     headers={"Authorization": f"Bearer {access}"},
                     timeout=20.0,
                 )
@@ -413,8 +419,16 @@ def _download_file_bytes(
         out_mime = "text/plain"
     elif mime == "application/vnd.google-apps.spreadsheet":
         url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
-        params = {"mimeType": "text/csv"}
-        out_mime = "text/csv"
+        params = {
+            "mimeType": (
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            )
+        }
+        out_mime = (
+            "application/vnd.openxmlformats-officedocument"
+            ".spreadsheetml.sheet"
+        )
     elif mime == "application/vnd.google-apps.presentation":
         url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
         params = {"mimeType": "text/plain"}
