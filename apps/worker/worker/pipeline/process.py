@@ -6,22 +6,28 @@ import math
 import re
 from typing import Iterable, List
 
+from app.services.document_kinds import classify_document
+
 logger = logging.getLogger(__name__)
 
 
 def parse_bytes(filename: str, mime_type: str | None, data: bytes) -> str:
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    mime = (mime_type or "").lower()
-
-    if ext == "pdf" or "pdf" in mime:
+    kind = classify_document(filename, mime_type)
+    if kind == "pdf":
         return _parse_pdf(data)
-    if ext == "docx" or "wordprocessingml" in mime:
+    if kind == "docx":
         return _parse_docx(data)
-    if ext == "xlsx" or "spreadsheetml" in mime:
+    if kind == "xlsx":
         return _parse_xlsx(data)
-    if ext == "pptx" or "presentationml" in mime:
+    if kind == "pptx":
         return _parse_pptx(data)
-    if ext in {"txt", "csv"} or mime.startswith("text/"):
+    if kind == "doc":
+        return _parse_legacy_office(data, "catdoc")
+    if kind == "xls":
+        return _parse_legacy_office(data, "xls2csv")
+    if kind == "ppt":
+        return _parse_legacy_office(data, "catppt")
+    if kind == "text":
         return data.decode("utf-8", errors="replace")
     raise ValueError(f"Unsupported file type for parsing: {filename}")
 
@@ -80,6 +86,25 @@ def _parse_pptx(data: bytes) -> str:
         if texts:
             parts.append(f"# Slide {idx}\n" + "\n".join(texts))
     return "\n\n".join(parts)
+
+
+def _parse_legacy_office(data: bytes, tool: str) -> str:
+    """Read text out of an old-format .doc/.xls/.ppt file via the `catdoc`
+    family of tools (installed in the worker image -- see apps/worker/Dockerfile).
+    No timeout handling beyond the caller's existing per-file try/except
+    (accepted scope cut for Piece 4A)."""
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(suffix=".bin") as tmp:
+        tmp.write(data)
+        tmp.flush()
+        result = subprocess.run(
+            [tool, tmp.name], capture_output=True, timeout=60
+        )
+    if result.returncode != 0:
+        raise ValueError(f"{tool} failed to read this file")
+    return result.stdout.decode("utf-8", errors="replace")
 
 
 def chunk_text(

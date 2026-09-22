@@ -204,7 +204,12 @@ class Settings(BaseSettings):
             "text/csv,"
             "application/vnd.google-apps.document,"
             "application/vnd.google-apps.spreadsheet,"
-            "application/vnd.google-apps.presentation"
+            "application/vnd.google-apps.presentation,"
+            "application/msword,"
+            "application/vnd.ms-excel,"
+            "application/vnd.ms-powerpoint,"
+            "application/zip,"
+            "application/x-zip-compressed"
         ),
         alias="DRIVE_ALLOWED_MIME",
     )
