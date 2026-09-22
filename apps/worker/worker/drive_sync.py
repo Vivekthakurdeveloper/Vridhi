@@ -31,12 +31,15 @@ from app.services.drive import DriveService, get_mock_files
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
 from app.services.tokens import TokenStore, get_token_store
+from app.services.document_kinds import classify_document
 from app.services.tombstone import (
     REASON_MANUAL,
     REASON_SOURCE_REMOVED,
+    base_external_id,
     missing_external_ids,
     tombstone_many,
 )
+from app.services.zip_expand import expand_zip
 from worker.google_api import google_get_with_retry
 
 logger = logging.getLogger(__name__)
@@ -123,22 +126,41 @@ def _run_drive_sync(
 
         for item in files:
             try:
-                created = _upsert_drive_file(
-                    db=db,
-                    settings=settings,
-                    storage=storage,
-                    queue=queue,
-                    drive=drive,
-                    conn=conn,
-                    file_meta=item,
-                    visibility_default=visibility,
-                    selected_user_ids=selected_user_ids,
-                    uploaded_by=requested_by,
-                )
-                if created is None:
-                    job.progress_skipped += 1
+                if _is_zip_file(item):
+                    created_list = _upsert_drive_zip(
+                        db=db,
+                        settings=settings,
+                        storage=storage,
+                        queue=queue,
+                        drive=drive,
+                        conn=conn,
+                        file_meta=item,
+                        visibility_default=visibility,
+                        selected_user_ids=selected_user_ids,
+                        uploaded_by=requested_by,
+                        search=search,
+                    )
+                    if created_list:
+                        job.progress_done += len(created_list)
+                    else:
+                        job.progress_skipped += 1
                 else:
-                    job.progress_done += 1
+                    created = _upsert_drive_file(
+                        db=db,
+                        settings=settings,
+                        storage=storage,
+                        queue=queue,
+                        drive=drive,
+                        conn=conn,
+                        file_meta=item,
+                        visibility_default=visibility,
+                        selected_user_ids=selected_user_ids,
+                        uploaded_by=requested_by,
+                    )
+                    if created is None:
+                        job.progress_skipped += 1
+                    else:
+                        job.progress_done += 1
                 db.commit()
             except Exception as exc:
                 logger.exception("drive.file_failed", extra={"operation": "drive_sync"})
@@ -289,10 +311,12 @@ def _tombstone_missing_drive_docs(
             Document.deleted_at.is_(None),
         )
     ).all()
-    missing = missing_external_ids((d.external_id for d in live if d.external_id), listed_ids)
-    if not missing:
+    missing_bases = missing_external_ids(
+        (base_external_id(d.external_id) for d in live if d.external_id), listed_ids
+    )
+    if not missing_bases:
         return 0
-    docs = [d for d in live if d.external_id in missing]
+    docs = [d for d in live if base_external_id(d.external_id) in missing_bases]
     return tombstone_many(
         db, search, docs, reason=REASON_SOURCE_REMOVED, log_operation="drive_sync"
     )
@@ -364,7 +388,17 @@ def _download_file_bytes(
     conn: Connection,
     file_meta: dict[str, Any],
 ) -> tuple[bytes, str]:
+    if "_raw_bytes" in file_meta:
+        return file_meta["_raw_bytes"], file_meta.get("mimeType") or "application/octet-stream"
+
     if settings.google_drive_mode.lower() == "mock":
+        if file_meta.get("content_b64"):
+            import base64
+
+            return (
+                base64.b64decode(file_meta["content_b64"]),
+                file_meta.get("mimeType") or "application/octet-stream",
+            )
         content = (file_meta.get("content") or "").encode("utf-8")
         return content, file_meta.get("mimeType") or "text/plain"
 
@@ -649,3 +683,110 @@ def _upsert_drive_file(
     conn.config = cfg
     db.flush()
     return doc
+
+
+_ZIP_MIME = {"application/zip", "application/x-zip-compressed"}
+
+
+def _is_zip_file(file_meta: dict[str, Any]) -> bool:
+    mime = (file_meta.get("mimeType") or "").lower()
+    name = str(file_meta.get("name") or "").lower()
+    return mime in _ZIP_MIME or name.endswith(".zip")
+
+
+def _upsert_drive_zip(
+    *,
+    db: Session,
+    settings: Settings,
+    storage: ObjectStorage,
+    queue: IngestQueue,
+    drive: DriveService,
+    conn: Connection,
+    file_meta: dict[str, Any],
+    visibility_default: DocumentVisibility,
+    selected_user_ids: list[UUID],
+    uploaded_by: UUID,
+    search: Any,
+) -> list[Document]:
+    """A ZIP produces no Document of its own -- each supported inner file
+    becomes its own Document, external_id "<zip_id>::<inner path>", so it is
+    cited by its own name and hidden independently if later removed from a
+    changed archive. The zip is downloaded once; each inner file reuses the
+    existing single-file upsert (permissions, cursors, revive, ingest) by
+    passing a synthetic file_meta with data already attached."""
+    zip_external_id = str(file_meta["id"])
+    zip_data, _ = _download_file_bytes(drive, settings, conn, file_meta)
+    try:
+        entries = expand_zip(zip_data)
+    except ValueError as exc:
+        raise RuntimeError(f"Could not read zip {file_meta.get('name')}: {exc}") from exc
+
+    zip_name = str(file_meta.get("name") or "archive.zip")
+    modified = str(file_meta.get("modifiedTime") or "")
+    listed_inner_ids: set[str] = set()
+    created: list[Document] = []
+    for entry in entries:
+        inner_external_id = f"{zip_external_id}::{entry.path}"
+        listed_inner_ids.add(inner_external_id)
+        synthetic_meta = {
+            "id": inner_external_id,
+            "name": f"{zip_name} / {entry.path}",
+            "mimeType": _mime_for_kind(entry.kind),
+            "webViewLink": file_meta.get("webViewLink"),
+            "modifiedTime": modified,
+            "permissions": file_meta.get("permissions") or [],
+            "content": entry.data.decode("utf-8", errors="replace")
+            if entry.kind == "text"
+            else None,
+            "_raw_bytes": entry.data,
+        }
+        doc = _upsert_drive_file(
+            db=db,
+            settings=settings,
+            storage=storage,
+            queue=queue,
+            drive=drive,
+            conn=conn,
+            file_meta=synthetic_meta,
+            visibility_default=visibility_default,
+            selected_user_ids=selected_user_ids,
+            uploaded_by=uploaded_by,
+        )
+        if doc is not None:
+            created.append(doc)
+
+    # A file dropped from a changed zip is handled the same way a file
+    # dropped from Google is handled: compare what's stored for this zip
+    # against what the zip currently lists, tombstone the difference.
+    live_inner = db.scalars(
+        select(Document).where(
+            Document.tenant_id == conn.tenant_id,
+            Document.connection_id == conn.id,
+            Document.source == "google_drive",
+            Document.deleted_at.is_(None),
+            Document.external_id.like(f"{zip_external_id}::%"),
+        )
+    ).all()
+    missing_inner = missing_external_ids(
+        (d.external_id for d in live_inner), listed_inner_ids
+    )
+    if missing_inner:
+        docs_to_hide = [d for d in live_inner if d.external_id in missing_inner]
+        tombstone_many(
+            db, search, docs_to_hide, reason=REASON_SOURCE_REMOVED,
+            log_operation="drive_sync",
+        )
+    return created
+
+
+def _mime_for_kind(kind: str) -> str:
+    return {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls": "application/vnd.ms-excel",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppt": "application/vnd.ms-powerpoint",
+        "text": "text/plain",
+    }[kind]

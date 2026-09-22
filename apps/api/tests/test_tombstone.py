@@ -9,6 +9,7 @@ from app.services.tombstone import (
     REASON_MANUAL,
     REASON_SOURCE_REMOVED,
     NullSearchCleanup,
+    base_external_id,
     missing_external_ids,
     tombstone_document,
     tombstone_many,
@@ -96,6 +97,20 @@ def test_missing_external_ids_is_a_set_difference():
     assert missing_external_ids(["a", "b", "c"], ["b"]) == {"a", "c"}
     assert missing_external_ids([], ["x"]) == set()
     assert missing_external_ids(["a"], ["a"]) == set()
+
+
+def test_base_external_id_strips_zip_suffix():
+    assert base_external_id("zip-file-1::Reports/Leave.pdf") == "zip-file-1"
+
+
+def test_base_external_id_passthrough_for_plain_id():
+    assert base_external_id("file-msa-2024") == "file-msa-2024"
+
+
+def test_base_external_id_only_splits_on_first_separator():
+    # A path inside the zip could itself contain "::" in an unlikely filename;
+    # only the zip id (before the first "::") matters for deletion comparison.
+    assert base_external_id("zip-1::folder::weird.txt") == "zip-1"
 
 
 def test_null_search_cleanup_does_nothing():

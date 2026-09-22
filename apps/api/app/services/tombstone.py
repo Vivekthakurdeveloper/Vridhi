@@ -98,3 +98,12 @@ def tombstone_many(
 def missing_external_ids(stored: Iterable[str], listed: Iterable[str]) -> set[str]:
     """Ids we have stored that the source no longer lists."""
     return set(stored) - set(listed)
+
+
+def base_external_id(external_id: str) -> str:
+    """The source id a stored external_id belongs to, stripping a ZIP inner
+    path if present ("<zip_id>::<inner path>" -> "<zip_id>"). Used by Drive's
+    deletion pass so a live ZIP's still-present inner files are never mistaken
+    for something the source stopped listing (the listing only ever returns
+    the ZIP's own id, never its inner paths)."""
+    return external_id.split("::", 1)[0]
