@@ -26,6 +26,7 @@ from app.errors import AppError
 from app.models import Connection, SyncJob
 from app.security import ConnectionStatus, DocumentVisibility, SyncJobStatus, SyncJobType, utcnow
 from app.services import autosync
+from app.services.chat import ChatService
 from app.services.drive import DriveService
 from app.services.gmail import GmailService
 from app.services.queue import get_ingest_queue
@@ -35,7 +36,7 @@ from worker.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-_SYNC_JOB_TYPES = (SyncJobType.drive_sync, SyncJobType.gmail_sync)
+_SYNC_JOB_TYPES = (SyncJobType.drive_sync, SyncJobType.gmail_sync, SyncJobType.chat_sync)
 
 
 def run_scheduler_tick(settings: Settings, *, now: Optional[datetime] = None) -> int:
@@ -140,6 +141,13 @@ def _start_if_due(db: Session, settings: Settings, connection_id: UUID, now: dat
                 user_id=conn.connected_by_user_id,
                 visibility=DocumentVisibility(cfg.get("default_visibility") or "org"),
                 selected_user_ids=[UUID(u) for u in cfg.get("selected_user_ids") or []] or None,
+                incremental=True,
+                trigger="schedule",
+            )
+        elif conn.connector_type == "google_chat":
+            ChatService(db, settings, tokens, storage, queue).start_sync(
+                tenant_id=conn.tenant_id,
+                user_id=conn.connected_by_user_id,
                 incremental=True,
                 trigger="schedule",
             )

@@ -173,6 +173,25 @@ export interface GmailConnection extends AutoSyncState {
   connection_id: string | null
 }
 
+export interface ChatConnection extends AutoSyncState {
+  connected: boolean
+  status: string
+  health: string | null
+  account_email: string | null
+  last_sync_at: string | null
+  last_error: string | null
+  document_count: number
+  failed_document_count: number
+  mode: string
+  connection_id: string | null
+  selected_space_ids: string[]
+}
+
+export interface ChatSpace {
+  id: string
+  name: string
+}
+
 export interface DriveFolder {
   id: string
   name: string

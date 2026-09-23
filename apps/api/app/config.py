@@ -243,6 +243,36 @@ class Settings(BaseSettings):
         alias="GMAIL_ALLOWED_MIME",
     )
 
+    # --- Phase G: Google Chat ---
+    google_chat_enabled: bool = Field(default=False, alias="GOOGLE_CHAT_ENABLED")
+    google_chat_mode: str = Field(default="mock", alias="GOOGLE_CHAT_MODE")
+    google_chat_redirect_uri: str = Field(
+        default="http://localhost:8000/v1/connections/google_chat/oauth/callback",
+        alias="GOOGLE_CHAT_REDIRECT_URI",
+    )
+    google_chat_scopes: str = Field(
+        default=(
+            "https://www.googleapis.com/auth/chat.spaces.readonly "
+            "https://www.googleapis.com/auth/chat.messages.readonly "
+            "https://www.googleapis.com/auth/chat.memberships.readonly"
+        ),
+        alias="GOOGLE_CHAT_SCOPES",
+    )
+    chat_sync_page_size: int = Field(default=100, alias="CHAT_SYNC_PAGE_SIZE")
+    chat_max_attachment_bytes: int = Field(
+        default=26_214_400, alias="CHAT_MAX_ATTACHMENT_BYTES"
+    )
+    chat_allowed_mime: str = Field(
+        default=(
+            "application/pdf,"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document,"
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation,"
+            "text/plain,text/csv"
+        ),
+        alias="CHAT_ALLOWED_MIME",
+    )
+
     # --- Phase F: Enterprise Google Workspace auth foundation ---
     # mock = fixture domain/directory listing, no real Google calls;
     # live = real Domain-Wide Delegation via a per-tenant service account.
@@ -350,6 +380,23 @@ class Settings(BaseSettings):
     @property
     def gmail_scope_list(self) -> list[str]:
         return [s for s in self.gmail_scopes.split() if s.strip()]
+
+    @property
+    def google_chat_ready(self) -> bool:
+        if not self.google_chat_enabled:
+            return False
+        mode = self.google_chat_mode.lower().strip()
+        if mode == "mock":
+            return True
+        return bool(self.google_client_id and self.google_client_secret)
+
+    @property
+    def chat_allowed_mime_set(self) -> set[str]:
+        return set(_split_csv(self.chat_allowed_mime))
+
+    @property
+    def chat_scope_list(self) -> list[str]:
+        return [s for s in self.google_chat_scopes.split() if s.strip()]
 
     @property
     def workspace_enterprise_is_mock(self) -> bool:

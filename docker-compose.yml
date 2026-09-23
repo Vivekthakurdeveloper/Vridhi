@@ -75,6 +75,8 @@ services:
       GOOGLE_DRIVE_MODE: oauth
       GMAIL_ENABLED: "true"
       GMAIL_MODE: oauth
+      GOOGLE_CHAT_ENABLED: "true"
+      GOOGLE_CHAT_MODE: oauth
       TOKEN_BACKEND: fernet
       AI_QUERY_ENABLED: "true"
       SEARCH_ENABLED: "true"
@@ -119,6 +121,8 @@ services:
       GOOGLE_DRIVE_MODE: oauth
       GMAIL_ENABLED: "true"
       GMAIL_MODE: oauth
+      GOOGLE_CHAT_ENABLED: "true"
+      GOOGLE_CHAT_MODE: oauth
       TOKEN_BACKEND: fernet
       AI_QUERY_ENABLED: "true"
       SEARCH_ENABLED: "true"
