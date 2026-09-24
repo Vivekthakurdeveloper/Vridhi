@@ -25,7 +25,7 @@ AUTO_SYNC_ENABLED_KEY = "auto_sync_enabled"
 AUTO_SYNC_FAILURES_KEY = "auto_sync_failures"
 AUTO_SYNC_PAUSED_KEY = "auto_sync_paused_reason"
 
-SCHEDULABLE_CONNECTORS = ("google_drive", "gmail")
+SCHEDULABLE_CONNECTORS = ("google_drive", "gmail", "google_chat")
 SCHEDULABLE_STATUSES = (ConnectionStatus.connected, ConnectionStatus.sync_failed)
 
 

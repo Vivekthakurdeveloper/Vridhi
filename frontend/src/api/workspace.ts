@@ -1,7 +1,9 @@
 import { ApiError, API_BASE, apiRequest, apiUpload } from "@/api/client"
 import type {
   AuditEvent,
+  ChatConnection,
   ChatMessage,
+  ChatSpace,
   Citation,
   Connector,
   Dashboard,
@@ -109,6 +111,41 @@ export const gmailApi = {
   },
   setAutoSync(enabled: boolean) {
     return apiRequest<GmailConnection>("/v1/connections/gmail/auto-sync", {
+      method: "PUT",
+      body: { enabled },
+    })
+  },
+}
+
+export const chatApi = {
+  get() {
+    return apiRequest<ChatConnection>("/v1/connections/google_chat")
+  },
+  oauthStartUrl() {
+    return `${API_BASE}/v1/connections/google_chat/oauth/start`
+  },
+  disconnect() {
+    return apiRequest<{ ok: boolean }>("/v1/connections/google_chat", { method: "DELETE" })
+  },
+  spaces() {
+    return apiRequest<{ spaces: ChatSpace[]; selected_space_ids: string[] }>(
+      "/v1/connections/google_chat/spaces",
+    )
+  },
+  saveSpaces(spaceIds: string[]) {
+    return apiRequest<ChatConnection>("/v1/connections/google_chat/spaces", {
+      method: "PUT",
+      body: { space_ids: spaceIds },
+    })
+  },
+  sync(body: { space_ids?: string[]; incremental?: boolean } = {}) {
+    return apiRequest<SyncJob>("/v1/connections/google_chat/sync", {
+      method: "POST",
+      body: { space_ids: body.space_ids, incremental: body.incremental ?? true },
+    })
+  },
+  setAutoSync(enabled: boolean) {
+    return apiRequest<ChatConnection>("/v1/connections/google_chat/auto-sync", {
       method: "PUT",
       body: { enabled },
     })

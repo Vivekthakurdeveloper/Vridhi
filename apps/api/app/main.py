@@ -16,10 +16,11 @@ from app.deps import RequestContext
 from app.errors import AppError, error_body
 from app.logging import new_request_id, setup_logging
 from app.routers import router as api_router
-from app.routers.workspace import router as workspace_router
-from app.routers.intelligence import router as intelligence_router
+from app.routers.chat import router as chat_router
 from app.routers.drive import router as drive_router
 from app.routers.gmail import router as gmail_router
+from app.routers.intelligence import router as intelligence_router
+from app.routers.workspace import router as workspace_router
 from app.routers.workspace_enterprise import router as workspace_enterprise_router
 
 logger = logging.getLogger(__name__)
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(intelligence_router)
     app.include_router(drive_router)
     app.include_router(gmail_router)
+    app.include_router(chat_router)
     app.include_router(workspace_enterprise_router)
     return app
 

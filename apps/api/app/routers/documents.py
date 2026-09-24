@@ -102,7 +102,7 @@ async def upload_document(
     ctx: Annotated[RequestContext, Depends(require_tenant)],
     svc: Annotated[DocumentService, Depends(get_document_service)],
     db: Annotated[Session, Depends(get_db)],
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI's required pattern for file uploads
     visibility: str = Form(default="private"),
     selected_user_ids: str = Form(default=""),
 ) -> UploadResponse:

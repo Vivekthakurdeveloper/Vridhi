@@ -68,6 +68,10 @@ def test_gmail_does_not_need_folders():
     assert autosync.is_due(**_kwargs(connector_type="gmail", config={})) is True
 
 
+def test_google_chat_does_not_need_folders():
+    assert autosync.is_due(**_kwargs(connector_type="google_chat", config={})) is True
+
+
 def test_disconnected_syncing_and_unconfigured_are_not_due():
     for status in (ConnectionStatus.disconnected, ConnectionStatus.syncing, ConnectionStatus.not_configured):
         assert autosync.is_due(**_kwargs(status=status)) is False

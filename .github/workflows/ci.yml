@@ -8,9 +8,34 @@ on:
 jobs:
   api:
     runs-on: ubuntu-latest
+    services:
+      # test_chat_router.py (via conftest.py's authed_client/authed_admin_client
+      # fixtures) hits a real Postgres through /v1/auth/register -- the first
+      # DB-dependent router tests in this suite. Same image/credentials as
+      # docker-compose.yml's postgres service.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vridhi
+          POSTGRES_PASSWORD: vridhi
+          POSTGRES_DB: vridhi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U vridhi -d vridhi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: apps/api
+    env:
+      DATABASE_URL: postgresql+psycopg://vridhi:vridhi@localhost:5432/vridhi
+      # test_chat_sync_unit.py used to import worker.chat_sync directly; that
+      # helper now lives in app/services/chat_threads.py (see C1 fix), but
+      # apps/worker is added here too since worker-package imports remain
+      # otherwise unsupported in this job.
+      PYTHONPATH: ../worker:.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,6 +47,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: Lint
         run: ruff check .
+      - name: Run database migrations
+        run: alembic upgrade head
       - name: Unit tests
         run: pytest -q
       - name: Build Docker image

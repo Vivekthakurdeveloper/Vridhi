@@ -26,3 +26,5 @@ frontend/dist/
 apps/api/.mock-drive-overrides.json
 # Same idea for Gmail (scripts/smoke-phase-h.sh); mock mode only.
 apps/api/.mock-gmail-overrides.json
+# Same idea for Chat (scripts/smoke-phase-j.sh); mock mode only.
+apps/api/.mock-chat-overrides.json

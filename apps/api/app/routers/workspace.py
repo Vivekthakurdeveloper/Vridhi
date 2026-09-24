@@ -16,11 +16,11 @@ from app.routers.documents import (
     delete_document_handler,
     get_document_handler,
     get_document_job_handler,
+    get_document_service,
     get_job_handler,
     list_documents_handler,
     preview_document_handler,
     upload_document,
-    get_document_service,
 )
 from app.schemas import (
     AuditEventOut,
@@ -38,6 +38,7 @@ from app.schemas import (
     UsageOut,
 )
 from app.security import MemberRole, MemberStatus
+from app.services.chat import ChatService
 from app.services.documents import DocumentService
 from app.services.drive import DriveService
 from app.services.gmail import GmailService
@@ -68,10 +69,21 @@ def _gmail_service(db: Session, settings: Settings) -> GmailService:
     )
 
 
+def _chat_service(db: Session, settings: Settings) -> ChatService:
+    return ChatService(
+        db,
+        settings,
+        get_token_store(),
+        get_object_storage(),
+        get_ingest_queue(),
+    )
+
+
 def _connector_catalog(
     settings: Settings,
     drive_detail: dict | None = None,
     gmail_detail: dict | None = None,
+    chat_detail: dict | None = None,
 ) -> list[dict]:
     file_ready = settings.file_upload_ready
     drive_ready = settings.google_drive_ready
@@ -122,6 +134,30 @@ def _connector_catalog(
             gmail_status = "available"
             gmail_extra = {"mode": settings.gmail_mode}
 
+    chat_ready = settings.google_chat_ready
+    chat_status = "not_implemented"
+    chat_enabled = False
+    chat_extra: dict = {}
+    if settings.google_chat_enabled:
+        chat_enabled = chat_ready
+        if not chat_ready:
+            chat_status = "not_configured"
+        elif chat_detail and chat_detail.get("connected"):
+            chat_status = str(chat_detail.get("status") or "connected")
+            chat_extra = {
+                "last_sync_at": chat_detail.get("last_sync_at"),
+                "document_count": chat_detail.get("document_count"),
+                "failed_document_count": chat_detail.get("failed_document_count"),
+                "health": chat_detail.get("health"),
+                "account_email": chat_detail.get("account_email"),
+                "mode": chat_detail.get("mode"),
+                "auto_sync_enabled": chat_detail.get("auto_sync_enabled"),
+                "auto_sync_paused_reason": chat_detail.get("auto_sync_paused_reason"),
+            }
+        else:
+            chat_status = "available"
+            chat_extra = {"mode": settings.google_chat_mode}
+
     return [
         {
             "id": "google_drive",
@@ -138,6 +174,14 @@ def _connector_catalog(
             "status": gmail_status,
             "enabled": gmail_enabled,
             **gmail_extra,
+        },
+        {
+            "id": "google_chat",
+            "name": "Google Chat",
+            "description": "Search and ask questions about conversations in your Chat spaces.",
+            "status": chat_status,
+            "enabled": chat_enabled,
+            **chat_extra,
         },
         {
             "id": "file_upload",
@@ -188,10 +232,13 @@ def list_connectors(
     gmail_detail = None
     if settings.gmail_ready:
         gmail_detail = _gmail_service(db, settings).connection_detail(ctx.membership.tenant_id)
+    chat_detail = None
+    if settings.google_chat_ready:
+        chat_detail = _chat_service(db, settings).connection_detail(ctx.membership.tenant_id)
     return ConnectorsResponse(
         connectors=[
             ConnectorOut(**item)
-            for item in _connector_catalog(settings, detail, gmail_detail)
+            for item in _connector_catalog(settings, detail, gmail_detail, chat_detail)
         ]
     )
 
@@ -233,7 +280,10 @@ def get_dashboard(
     gmail_detail = None
     if settings.gmail_ready:
         gmail_detail = _gmail_service(db, settings).connection_detail(tenant_id)
-    catalog = _connector_catalog(settings, detail, gmail_detail)
+    chat_detail = None
+    if settings.google_chat_ready:
+        chat_detail = _chat_service(db, settings).connection_detail(tenant_id)
+    catalog = _connector_catalog(settings, detail, gmail_detail, chat_detail)
     connected = sum(
         1
         for c in catalog
@@ -243,7 +293,7 @@ def get_dashboard(
     available = sum(1 for c in catalog if c["enabled"])
     sync_times = [
         d.get("last_sync_at")
-        for d in (detail, gmail_detail)
+        for d in (detail, gmail_detail, chat_detail)
         if d and d.get("last_sync_at")
     ]
     last_sync = max(sync_times) if sync_times else None
@@ -285,7 +335,7 @@ async def upload_documents(
     ctx: Annotated[RequestContext, Depends(require_tenant)],
     svc: Annotated[DocumentService, Depends(get_document_service)],
     db: Annotated[Session, Depends(get_db)],
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI's required pattern for file uploads
     visibility: str = Form(default="private"),
     selected_user_ids: str = Form(default=""),
 ) -> UploadResponse:
@@ -435,6 +485,18 @@ def connect_connector(
             "ok": True,
             "connector_id": connector_id,
             "oauth_start_path": "/v1/connections/gmail/oauth/start",
+        }
+    if connector_id == "google_chat":
+        if not settings.google_chat_ready:
+            raise AppError(
+                "CONNECTOR_NOT_CONFIGURED",
+                "Google Chat isn't configured yet.",
+                503,
+            )
+        return {
+            "ok": True,
+            "connector_id": connector_id,
+            "oauth_start_path": "/v1/connections/google_chat/oauth/start",
         }
     raise AppError(
         "CONNECTOR_NOT_AVAILABLE",

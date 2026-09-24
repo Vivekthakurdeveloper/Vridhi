@@ -5,6 +5,7 @@ import { API_BASE, ApiError, userFacingError } from "@/api/client"
 import { featuresApi } from "@/api/auth"
 import {
   auditApi,
+  chatApi,
   connectorsApi,
   documentsApi,
   driveApi,
@@ -17,6 +18,7 @@ import {
 import { EmptyState, ErrorState, LoadingState, UnavailableState } from "@/components/States"
 import { Icon } from "@/components/Icon"
 import type {
+  ChatSpace,
   Connector,
   DocumentItem,
   DocumentPreview,
@@ -295,6 +297,10 @@ export function ConnectionsPage() {
   const [driveBusy, setDriveBusy] = useState(false)
   const [gmailBusy, setGmailBusy] = useState(false)
   const [activeGmailJob, setActiveGmailJob] = useState<SyncJob | null>(null)
+  const [chatBusy, setChatBusy] = useState(false)
+  const [activeChatJob, setActiveChatJob] = useState<SyncJob | null>(null)
+  const [chatSpaces, setChatSpaces] = useState<ChatSpace[]>([])
+  const [selectedSpaces, setSelectedSpaces] = useState<string[]>([])
 
   const canManage = membership?.role === "owner" || membership?.role === "admin"
   const drive = connectors.find((c) => c.id === "google_drive")
@@ -303,6 +309,9 @@ export function ConnectionsPage() {
   const gmail = connectors.find((c) => c.id === "gmail")
   const gmailConnected =
     !!gmail && ["connected", "syncing", "sync_failed"].includes(gmail.status)
+  const chat = connectors.find((c) => c.id === "google_chat")
+  const chatConnected =
+    !!chat && ["connected", "syncing", "sync_failed"].includes(chat.status)
 
   const [entDetail, setEntDetail] = useState<WorkspaceEnterpriseStatus | null>(null)
   const [entBusy, setEntBusy] = useState(false)
@@ -323,6 +332,15 @@ export function ConnectionsPage() {
         setFolders([])
         setHistory([])
         setFailedDocs([])
+      }
+      const gc = res.connectors.find((c) => c.id === "google_chat")
+      if (gc && ["connected", "syncing", "sync_failed"].includes(gc.status) && canManage) {
+        const spacesRes = await chatApi.spaces()
+        setChatSpaces(spacesRes.spaces)
+        setSelectedSpaces(spacesRes.selected_space_ids)
+      } else {
+        setChatSpaces([])
+        setSelectedSpaces([])
       }
       if (canManage) {
         try {
@@ -396,6 +414,22 @@ export function ConnectionsPage() {
     return () => window.clearInterval(timer)
   }, [activeGmailJob?.id, activeGmailJob?.status])
 
+  useEffect(() => {
+    if (!activeChatJob || ["succeeded", "failed", "dead"].includes(activeChatJob.status)) return
+    const timer = window.setInterval(async () => {
+      try {
+        const job = await jobsApi.get(activeChatJob.id)
+        setActiveChatJob(job)
+        if (["succeeded", "failed", "dead"].includes(job.status)) {
+          await load()
+        }
+      } catch {
+        /* ignore poll errors */
+      }
+    }, 1500)
+    return () => window.clearInterval(timer)
+  }, [activeChatJob?.id, activeChatJob?.status])
+
   async function onConnect(id: string) {
     setActionError(null)
     setActionMsg(null)
@@ -452,16 +486,34 @@ export function ConnectionsPage() {
     }
   }
 
-  async function onToggleAutoSync(id: "google_drive" | "gmail", enabled: boolean) {
+  async function onDisconnectChat() {
+    if (!window.confirm("Disconnect Google Chat? Synced documents stay until you delete them.")) return
+    setChatBusy(true)
+    setActionError(null)
+    try {
+      await chatApi.disconnect()
+      setActionMsg("Google Chat disconnected.")
+      await load()
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  async function onToggleAutoSync(id: "google_drive" | "gmail" | "google_chat", enabled: boolean) {
     setActionError(null)
     setActionMsg(null)
     try {
       if (id === "google_drive") {
         setDriveBusy(true)
         await driveApi.setAutoSync(enabled)
-      } else {
+      } else if (id === "gmail") {
         setGmailBusy(true)
         await gmailApi.setAutoSync(enabled)
+      } else {
+        setChatBusy(true)
+        await chatApi.setAutoSync(enabled)
       }
       await load()
     } catch (err) {
@@ -469,6 +521,7 @@ export function ConnectionsPage() {
     } finally {
       setDriveBusy(false)
       setGmailBusy(false)
+      setChatBusy(false)
     }
   }
 
@@ -485,6 +538,43 @@ export function ConnectionsPage() {
     } finally {
       setGmailBusy(false)
     }
+  }
+
+  async function onSyncChatNow() {
+    setChatBusy(true)
+    setActionError(null)
+    try {
+      const job = await chatApi.sync({ incremental: true })
+      setActiveChatJob(job)
+      setActionMsg("Google Chat sync started.")
+      await load()
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  async function onSaveChatSpaces(spaceIds: string[]) {
+    setChatBusy(true)
+    setActionError(null)
+    try {
+      await chatApi.saveSpaces(spaceIds)
+      setActionMsg("Spaces saved.")
+      const spacesRes = await chatApi.spaces()
+      setChatSpaces(spacesRes.spaces)
+      setSelectedSpaces(spacesRes.selected_space_ids)
+    } catch (err) {
+      setActionError(userFacingError(err))
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
+  function toggleSpace(id: string) {
+    setSelectedSpaces((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
   }
 
   async function onSubmitWorkspaceEnterprise(e: FormEvent) {
@@ -601,8 +691,9 @@ export function ConnectionsPage() {
                 connector.status === "not_configured")
             const isDrive = connector.id === "google_drive"
             const isGmail = connector.id === "gmail"
+            const isChat = connector.id === "google_chat"
             // OAuth connectors start their handshake on an admin-guarded route.
-            const needsAdmin = isDrive || isGmail
+            const needsAdmin = isDrive || isGmail || isChat
             return (
               <article className="connector-card" key={connector.id}>
                 <div className="connector-top">
@@ -612,18 +703,20 @@ export function ConnectionsPage() {
                   </span>
                 </div>
                 <p>{connector.description}</p>
-                {connector.account_email ? <small>Account {connector.account_email}</small> : null}
-                {connector.last_sync_at ? (
-                  <small>Last sync {formatDateTime(connector.last_sync_at)}</small>
-                ) : null}
-                {connector.document_count != null ? (
-                  <small>{connector.document_count.toLocaleString()} documents</small>
-                ) : null}
-                {connector.failed_document_count ? (
-                  <small>{connector.failed_document_count} failed</small>
-                ) : null}
-                {connector.health ? <small>Health: {connector.health}</small> : null}
-                {connector.mode ? <small>Mode: {connector.mode}</small> : null}
+                <div className="connector-meta">
+                  {connector.account_email ? <small>Account {connector.account_email}</small> : null}
+                  {connector.last_sync_at ? (
+                    <small>Last sync {formatDateTime(connector.last_sync_at)}</small>
+                  ) : null}
+                  {connector.document_count != null ? (
+                    <small>{connector.document_count.toLocaleString()} documents</small>
+                  ) : null}
+                  {connector.failed_document_count ? (
+                    <small>{connector.failed_document_count} failed</small>
+                  ) : null}
+                  {connector.health ? <small>Health: {connector.health}</small> : null}
+                  {connector.mode ? <small>Mode: {connector.mode}</small> : null}
+                </div>
                 {connector.status === "not_implemented" ? (
                   <p className="muted">This connection isn't available yet.</p>
                 ) : null}
@@ -672,17 +765,37 @@ export function ConnectionsPage() {
                       Disconnect
                     </button>
                   ) : null}
+                  {isChat && chatConnected && canManage ? (
+                    <button
+                      type="button"
+                      className="primary-button"
+                      disabled={chatBusy}
+                      onClick={() => void onSyncChatNow()}
+                    >
+                      Sync Now
+                    </button>
+                  ) : null}
+                  {isChat && chatConnected && canManage ? (
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={chatBusy}
+                      onClick={() => void onDisconnectChat()}
+                    >
+                      Disconnect
+                    </button>
+                  ) : null}
                 </div>
-                {(isDrive && driveConnected) || (isGmail && gmailConnected) ? (
+                {(isDrive && driveConnected) || (isGmail && gmailConnected) || (isChat && chatConnected) ? (
                   <div className="auto-sync">
                     <label>
                       <input
                         type="checkbox"
                         checked={connector.auto_sync_enabled !== false}
-                        disabled={!canManage || driveBusy || gmailBusy}
+                        disabled={!canManage || driveBusy || gmailBusy || chatBusy}
                         onChange={(e) =>
                           void onToggleAutoSync(
-                            connector.id as "google_drive" | "gmail",
+                            connector.id as "google_drive" | "gmail" | "google_chat",
                             e.target.checked,
                           )
                         }
@@ -708,6 +821,23 @@ export function ConnectionsPage() {
                     </p>
                     {activeGmailJob.error_message ? (
                       <p className="muted">{activeGmailJob.error_message}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {isChat && activeChatJob ? (
+                  <div className="sync-progress">
+                    <strong>Sync job</strong>
+                    <span className={`status-pill status-${activeChatJob.status}`}>
+                      {activeChatJob.status}
+                    </span>
+                    <p>
+                      {activeChatJob.progress_done ?? 0} done ·{" "}
+                      {activeChatJob.progress_failed ?? 0} failed ·{" "}
+                      {activeChatJob.progress_skipped ?? 0} skipped /{" "}
+                      {activeChatJob.progress_total ?? 0} total
+                    </p>
+                    {activeChatJob.error_message ? (
+                      <p className="muted">{activeChatJob.error_message}</p>
                     ) : null}
                   </div>
                 ) : null}
@@ -824,6 +954,46 @@ export function ConnectionsPage() {
         </section>
       ) : null}
 
+      {chatConnected && canManage ? (
+        <section className="drive-panel">
+          <div className="page-head">
+            <div>
+              <span className="eyebrow">GOOGLE CHAT</span>
+              <h2>Spaces & sync</h2>
+              <p>Choose spaces to index.</p>
+            </div>
+          </div>
+
+          <div className="drive-folders">
+            <div className="drive-folder-group">
+              {chatSpaces.map((space) => {
+                const checked = selectedSpaces.includes(space.id)
+                return (
+                  <label key={space.id} className="folder-row">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSpace(space.id)}
+                    />
+                    <span>
+                      <strong>{space.name}</strong>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={chatBusy}
+            onClick={() => void onSaveChatSpaces(selectedSpaces)}
+          >
+            Save spaces
+          </button>
+        </section>
+      ) : null}
+
       {canManage ? (
         <section className="drive-panel">
           <div className="page-head">
@@ -851,7 +1021,7 @@ export function ConnectionsPage() {
             </div>
           ) : null}
 
-          <form onSubmit={(e) => void onSubmitWorkspaceEnterprise(e)}>
+          <form className="ent-form" onSubmit={(e) => void onSubmitWorkspaceEnterprise(e)}>
             <label>
               Google Workspace domain
               <input

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.config import get_settings as get_app_settings
 from app.models import SyncJob
 from app.security import SyncJobStatus, SyncJobType
+from worker.chat_sync import process_chat_sync_job
 from worker.config import Settings, get_settings
 from worker.db import SessionLocal
 from worker.drive_sync import process_drive_sync_job
@@ -36,6 +37,10 @@ def _dispatch_job(db, settings: Settings, storage, search, *, job_id: UUID, job_
 
     if resolved == SyncJobType.gmail_sync.value or resolved == "gmail_sync":
         process_gmail_sync_job(db, job_id=job_id, search=search)
+        return
+
+    if resolved == SyncJobType.chat_sync.value or resolved == "chat_sync":
+        process_chat_sync_job(db, job_id=job_id, search=search)
         return
 
     process_ingest_job(db, settings, storage, search, job_id=job_id)

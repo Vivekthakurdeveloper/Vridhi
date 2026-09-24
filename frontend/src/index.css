@@ -104,6 +104,29 @@ a.nav-item, a.small-link, a.primary-button, a.secondary-button { text-decoration
 .preview-body { white-space: pre-wrap; font: inherit; font-size: 12px; line-height: 1.65; color: #3b4742; background: #f7f8f6; border-radius: 6px; padding: 14px; max-height: 360px; overflow: auto; }
 .status-pending, .status-processing, .status-queued, .status-running { background: #f4f1ea; color: #8a6a2f; }
 .status-ready, .status-succeeded, .status-available { background: #e8f1ed; color: #176b5b; }
+.connector-grid { display: grid; gap: 18px; margin-top: 28px; }
+.connector-card { background: #fff; border: 1px solid #e0e6e2; border-radius: 10px; padding: 22px 24px; box-shadow: 0 2px 5px #1c312608; display: grid; gap: 4px; }
+.connector-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 2px; }
+.connector-top h2 { margin: 0; font-size: 17px; font-weight: 800; letter-spacing: -.3px; color: #1e2925; }
+.connector-card > p { margin: 0 0 6px; color: #68746f; font-size: 13px; }
+.connector-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 10px; }
+.connector-meta small { color: #74817c; font-size: 11px; font-weight: 600; }
+.connector-actions { margin-top: 4px; }
+.status-pill { display: inline-flex; align-items: center; flex-shrink: 0; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 800; background: #f1f3f1; color: #5d6d66; }
+.status-connected, .status-syncing { background: #e8f1ed; color: #176b5b; }
+.status-not_configured, .status-disconnected, .status-not_implemented { background: #f1f3f1; color: #74817c; }
+.auto-sync { margin-top: 10px; padding-top: 12px; border-top: 1px solid #edf0ee; }
+.auto-sync label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: #31463f; }
+.auto-sync p { margin: 6px 0 0; }
+.drive-panel h2 { font-weight: 800; letter-spacing: -.3px; color: #1e2925; }
+.drive-panel h3 { font-weight: 800; color: #1e2925; }
+.drive-folder-group { display: grid; gap: 8px; margin-bottom: 4px; }
+.drive-folder-group h4 { margin: 4px 0 0; font-size: 12px; font-weight: 800; color: #4d5b55; text-transform: uppercase; letter-spacing: .04em; }
+.ent-form { display: grid; gap: 16px; margin-top: 4px; }
+.ent-form label { display: grid; gap: 6px; font-size: 12px; font-weight: 700; color: #31463f; }
+.ent-form input, .ent-form textarea { width: 100%; box-sizing: border-box; border: 1px solid #cfd9d3; border-radius: 7px; padding: 10px 12px; font: inherit; font-size: 13px; background: #fff; resize: vertical; }
+.ent-form input:focus, .ent-form textarea:focus { outline: none; border-color: #176b5b; box-shadow: 0 0 0 3px #176b5b17; }
+.ent-form .primary-button { justify-self: start; }
 .ask-with-drawer { padding-right: 420px; }
 .inline-cite { border: 0; background: #e8f1ed; color: #176b5b; border-radius: 4px; padding: 0 4px; font-weight: 800; font-size: 11px; margin: 0 2px; }
 .feedback-row { display: flex; gap: 6px; }
