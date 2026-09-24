@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    catdoc \
     && rm -rf /var/lib/apt/lists/*
 
 COPY apps/worker/requirements.txt /app/requirements.txt

@@ -139,6 +139,20 @@ class Settings(BaseSettings):
     worker_poll_interval_seconds: float = Field(default=2.0, alias="WORKER_POLL_INTERVAL_SECONDS")
     worker_concurrency: int = Field(default=2, alias="WORKER_CONCURRENCY")
 
+    # --- Phase H: continuous sync ---
+    auto_sync_enabled_global: bool = Field(default=True, alias="AUTO_SYNC_ENABLED_GLOBAL")
+    auto_sync_interval_seconds: int = Field(default=900, alias="AUTO_SYNC_INTERVAL_SECONDS")
+    auto_sync_tick_seconds: int = Field(default=60, alias="AUTO_SYNC_TICK_SECONDS")
+    auto_sync_max_consecutive_failures: int = Field(
+        default=5, alias="AUTO_SYNC_MAX_CONSECUTIVE_FAILURES"
+    )
+    auto_sync_stale_after_seconds: int = Field(
+        default=3600, alias="AUTO_SYNC_STALE_AFTER_SECONDS"
+    )
+    auto_sync_max_starts_per_tick: int = Field(
+        default=5, alias="AUTO_SYNC_MAX_STARTS_PER_TICK"
+    )
+
     # --- Phase C: hybrid retrieval + RAG ---
     retrieval_top_k: int = Field(default=40, alias="RETRIEVAL_TOP_K")
     retrieval_bm25_size: int = Field(default=40, alias="RETRIEVAL_BM25_SIZE")
@@ -190,7 +204,12 @@ class Settings(BaseSettings):
             "text/csv,"
             "application/vnd.google-apps.document,"
             "application/vnd.google-apps.spreadsheet,"
-            "application/vnd.google-apps.presentation"
+            "application/vnd.google-apps.presentation,"
+            "application/msword,"
+            "application/vnd.ms-excel,"
+            "application/vnd.ms-powerpoint,"
+            "application/zip,"
+            "application/x-zip-compressed"
         ),
         alias="DRIVE_ALLOWED_MIME",
     )

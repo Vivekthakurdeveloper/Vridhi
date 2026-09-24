@@ -26,15 +26,26 @@ from app.security import (
     SyncJobType,
     utcnow,
 )
+from app.services import autosync
 from app.services.drive import DriveService, get_mock_files
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
 from app.services.tokens import TokenStore, get_token_store
+from app.services.document_kinds import classify_document
+from app.services.tombstone import (
+    REASON_MANUAL,
+    REASON_SOURCE_REMOVED,
+    base_external_id,
+    missing_external_ids,
+    tombstone_many,
+)
+from app.services.zip_expand import expand_zip
+from worker.google_api import google_get_with_retry
 
 logger = logging.getLogger(__name__)
 
 
-def process_drive_sync_job(db: Session, *, job_id: UUID) -> None:
+def process_drive_sync_job(db: Session, *, job_id: UUID, search: Any) -> None:
     """Worker entrypoint: uses API app services (storage/queue/tokens/settings)."""
     settings = get_settings()
     storage = get_object_storage()
@@ -46,6 +57,7 @@ def process_drive_sync_job(db: Session, *, job_id: UUID) -> None:
         storage=storage,
         queue=queue,
         tokens=tokens,
+        search=search,
         job_id=job_id,
     )
 
@@ -57,6 +69,7 @@ def _run_drive_sync(
     storage: ObjectStorage,
     queue: IngestQueue,
     tokens: TokenStore,
+    search: Any,
     job_id: UUID,
 ) -> None:
     job = db.get(SyncJob, job_id)
@@ -113,22 +126,41 @@ def _run_drive_sync(
 
         for item in files:
             try:
-                created = _upsert_drive_file(
-                    db=db,
-                    settings=settings,
-                    storage=storage,
-                    queue=queue,
-                    drive=drive,
-                    conn=conn,
-                    file_meta=item,
-                    visibility_default=visibility,
-                    selected_user_ids=selected_user_ids,
-                    uploaded_by=requested_by,
-                )
-                if created is None:
-                    job.progress_skipped += 1
+                if _is_zip_file(item):
+                    created_list = _upsert_drive_zip(
+                        db=db,
+                        settings=settings,
+                        storage=storage,
+                        queue=queue,
+                        drive=drive,
+                        conn=conn,
+                        file_meta=item,
+                        visibility_default=visibility,
+                        selected_user_ids=selected_user_ids,
+                        uploaded_by=requested_by,
+                        search=search,
+                    )
+                    if created_list:
+                        job.progress_done += len(created_list)
+                    else:
+                        job.progress_skipped += 1
                 else:
-                    job.progress_done += 1
+                    created = _upsert_drive_file(
+                        db=db,
+                        settings=settings,
+                        storage=storage,
+                        queue=queue,
+                        drive=drive,
+                        conn=conn,
+                        file_meta=item,
+                        visibility_default=visibility,
+                        selected_user_ids=selected_user_ids,
+                        uploaded_by=requested_by,
+                    )
+                    if created is None:
+                        job.progress_skipped += 1
+                    else:
+                        job.progress_done += 1
                 db.commit()
             except Exception as exc:
                 logger.exception("drive.file_failed", extra={"operation": "drive_sync"})
@@ -145,10 +177,41 @@ def _run_drive_sync(
         if not job or not conn:
             raise RuntimeError("Drive sync job or connection missing after file loop")
 
+        # Deletion propagation. Reaching this point means the folder listing
+        # completed without raising (a listing error fails the whole job above),
+        # so "stored but not listed" really means deleted, trashed, moved out,
+        # or its folder was un-selected. Never run this on an incomplete listing.
+        # An empty listing of a folder that is itself gone looks the same, so
+        # confirm the selected folders still exist first.
+        _assert_selected_folders_visible(drive, settings, conn, folder_ids)
+        removed_count = _tombstone_missing_drive_docs(
+            db, search=search, conn=conn, listed_ids={str(f["id"]) for f in files}
+        )
+        if removed_count:
+            logger.info(
+                "drive.tombstoned_missing",
+                extra={"operation": "drive_sync", "tenant_id": str(conn.tenant_id)},
+            )
+        job = db.get(SyncJob, job_id)
+        conn = db.get(Connection, job.connection_id) if job and job.connection_id else None
+        if not job or not conn:
+            raise RuntimeError("Drive sync job or connection missing after deletion pass")
+
+        # Same reason as the per-file cursor write: pick up config/status changes
+        # made through the API during the run, and never resurrect a connection
+        # an admin disconnected mid-sync.
+        db.refresh(conn, ["config", "status"])
         job.status = SyncJobStatus.succeeded
         job.finished_at = utcnow()
+        if conn.status == ConnectionStatus.disconnected:
+            db.commit()
+            return
+
+        # One definition of a failed sync: it drives both the connection
+        # status/health and the auto-sync failure counter.
+        sync_ok = not (job.progress_failed and not (job.progress_done or job.progress_skipped))
         conn.status = ConnectionStatus.connected
-        if job.progress_failed and not job.progress_done:
+        if not sync_ok:
             conn.health = ConnectionHealth.error
             conn.status = ConnectionStatus.sync_failed
             conn.last_error = job.error_message
@@ -164,6 +227,11 @@ def _run_drive_sync(
         cfg = dict(conn.config or {})
         cfg["page_token"] = utcnow().isoformat()
         conn.config = cfg
+        conn.config = autosync.record_sync_outcome(
+            conn.config,
+            succeeded=sync_ok,
+            max_failures=settings.auto_sync_max_consecutive_failures,
+        )
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -180,8 +248,78 @@ def _run_drive_sync(
             conn.health = ConnectionHealth.error
             conn.last_error = str(exc)[:2000]
             conn.last_error_at = utcnow()
+            # A dead job is a failed sync. Under QUEUE_BACKEND=db a failed job is
+            # never retried (so never dead), so any failure counts there.
+            if job and (
+                job.status == SyncJobStatus.dead
+                or settings.queue_backend.lower().strip() == "db"
+            ):
+                conn.config = autosync.record_sync_outcome(
+                    conn.config,
+                    succeeded=False,
+                    max_failures=settings.auto_sync_max_consecutive_failures,
+                )
         db.commit()
         raise
+
+
+def _assert_selected_folders_visible(
+    drive: DriveService,
+    settings: Settings,
+    conn: Connection,
+    folder_ids: list[str],
+) -> None:
+    """Refuse to run the deletion pass if a selected folder is gone.
+
+    ``files.list`` with ``'<id>' in parents`` answers 200 with an empty list when
+    the folder is trashed or no longer shared with the token owner, which would
+    read as "every file was deleted". Fail the job instead so nothing is hidden.
+    Errors name only the folder id (no tokens, no Google response bodies).
+    """
+    if settings.google_drive_mode.lower() == "mock" or not folder_ids:
+        return  # mock listings come from fixtures; there is no folder to lose
+    import httpx
+
+    access = drive._access_token(conn)
+    for folder_id in folder_ids:
+        try:
+            resp = google_get_with_retry(
+                f"https://www.googleapis.com/drive/v3/files/{folder_id}",
+                params={"fields": "id,trashed", "supportsAllDrives": "true"},
+                headers={"Authorization": f"Bearer {access}"},
+                timeout=20.0,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(
+                f"Drive folder {folder_id} could not be verified "
+                f"(HTTP {exc.response.status_code}); no documents were hidden"
+            ) from None
+        if resp.json().get("trashed"):
+            raise RuntimeError(
+                f"Drive folder {folder_id} is in the trash; no documents were hidden"
+            )
+
+
+def _tombstone_missing_drive_docs(
+    db: Session, *, search: Any, conn: Connection, listed_ids: set[str]
+) -> int:
+    live = db.scalars(
+        select(Document).where(
+            Document.tenant_id == conn.tenant_id,
+            Document.source == "google_drive",
+            Document.connection_id == conn.id,
+            Document.deleted_at.is_(None),
+        )
+    ).all()
+    missing_bases = missing_external_ids(
+        (base_external_id(d.external_id) for d in live if d.external_id), listed_ids
+    )
+    if not missing_bases:
+        return 0
+    docs = [d for d in live if base_external_id(d.external_id) in missing_bases]
+    return tombstone_many(
+        db, search, docs, reason=REASON_SOURCE_REMOVED, log_operation="drive_sync"
+    )
 
 
 def _list_files_for_folders(
@@ -208,6 +346,9 @@ def _list_files_for_folders(
                 "q": q,
                 "fields": "nextPageToken, files(id, name, mimeType, webViewLink, modifiedTime, size)",
                 "pageSize": settings.drive_sync_page_size,
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+                "corpora": "allDrives",
             }
             if page_token:
                 params["pageToken"] = page_token
@@ -229,7 +370,10 @@ def _list_files_for_folders(
                     continue
                 perm_resp = httpx.get(
                     f"https://www.googleapis.com/drive/v3/files/{f['id']}/permissions",
-                    params={"fields": "permissions(type,role,emailAddress)"},
+                    params={
+                        "fields": "permissions(type,role,emailAddress)",
+                        "supportsAllDrives": "true",
+                    },
                     headers={"Authorization": f"Bearer {access}"},
                     timeout=20.0,
                 )
@@ -250,7 +394,17 @@ def _download_file_bytes(
     conn: Connection,
     file_meta: dict[str, Any],
 ) -> tuple[bytes, str]:
+    if "_raw_bytes" in file_meta:
+        return file_meta["_raw_bytes"], file_meta.get("mimeType") or "application/octet-stream"
+
     if settings.google_drive_mode.lower() == "mock":
+        if file_meta.get("content_b64"):
+            import base64
+
+            return (
+                base64.b64decode(file_meta["content_b64"]),
+                file_meta.get("mimeType") or "application/octet-stream",
+            )
         content = (file_meta.get("content") or "").encode("utf-8")
         return content, file_meta.get("mimeType") or "text/plain"
 
@@ -265,8 +419,16 @@ def _download_file_bytes(
         out_mime = "text/plain"
     elif mime == "application/vnd.google-apps.spreadsheet":
         url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
-        params = {"mimeType": "text/csv"}
-        out_mime = "text/csv"
+        params = {
+            "mimeType": (
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            )
+        }
+        out_mime = (
+            "application/vnd.openxmlformats-officedocument"
+            ".spreadsheetml.sheet"
+        )
     elif mime == "application/vnd.google-apps.presentation":
         url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export"
         params = {"mimeType": "text/plain"}
@@ -342,16 +504,26 @@ def _upsert_drive_file(
 ) -> Optional[Document]:
     external_id = str(file_meta["id"])
     modified = str(file_meta.get("modifiedTime") or "")
+    # Include deleted rows, preferring a live one. A document the user deleted by
+    # hand must stay deleted; one we hid because the file left Drive is revived
+    # (same row, no duplicate) when the file returns.
     existing = db.scalar(
         select(Document)
         .where(
             Document.tenant_id == conn.tenant_id,
             Document.source == "google_drive",
             Document.external_id == external_id,
-            Document.deleted_at.is_(None),
         )
+        .order_by(Document.deleted_at.is_(None).desc(), Document.created_at.desc())
+        .limit(1)
         .options(selectinload(Document.grants), selectinload(Document.group_grants))
     )
+    if existing is not None and existing.deleted_at is not None:
+        if existing.deleted_reason == REASON_MANUAL:
+            return None
+        existing.deleted_at = None
+        existing.deleted_reason = None
+        existing.status = DocumentStatus.pending
     prev_modified = ((conn.config or {}).get("file_cursors") or {}).get(external_id)
     content_unchanged = (
         existing and prev_modified and prev_modified == modified and existing.status == DocumentStatus.ready
@@ -514,6 +686,10 @@ def _upsert_drive_file(
         external_id=external_id,
     )
 
+    # The config we read before the (slow) download may be stale: the API can
+    # have changed it meanwhile (auto-sync switch, folder selection, disconnect).
+    # Re-read right before the read-modify-write so we don't revert that.
+    db.refresh(conn, ["config"])
     cfg = dict(conn.config or {})
     cursors = dict(cfg.get("file_cursors") or {})
     cursors[external_id] = modified
@@ -521,3 +697,110 @@ def _upsert_drive_file(
     conn.config = cfg
     db.flush()
     return doc
+
+
+_ZIP_MIME = {"application/zip", "application/x-zip-compressed"}
+
+
+def _is_zip_file(file_meta: dict[str, Any]) -> bool:
+    mime = (file_meta.get("mimeType") or "").lower()
+    name = str(file_meta.get("name") or "").lower()
+    return mime in _ZIP_MIME or name.endswith(".zip")
+
+
+def _upsert_drive_zip(
+    *,
+    db: Session,
+    settings: Settings,
+    storage: ObjectStorage,
+    queue: IngestQueue,
+    drive: DriveService,
+    conn: Connection,
+    file_meta: dict[str, Any],
+    visibility_default: DocumentVisibility,
+    selected_user_ids: list[UUID],
+    uploaded_by: UUID,
+    search: Any,
+) -> list[Document]:
+    """A ZIP produces no Document of its own -- each supported inner file
+    becomes its own Document, external_id "<zip_id>::<inner path>", so it is
+    cited by its own name and hidden independently if later removed from a
+    changed archive. The zip is downloaded once; each inner file reuses the
+    existing single-file upsert (permissions, cursors, revive, ingest) by
+    passing a synthetic file_meta with data already attached."""
+    zip_external_id = str(file_meta["id"])
+    zip_data, _ = _download_file_bytes(drive, settings, conn, file_meta)
+    try:
+        entries = expand_zip(zip_data)
+    except ValueError as exc:
+        raise RuntimeError(f"Could not read zip {file_meta.get('name')}: {exc}") from exc
+
+    zip_name = str(file_meta.get("name") or "archive.zip")
+    modified = str(file_meta.get("modifiedTime") or "")
+    listed_inner_ids: set[str] = set()
+    created: list[Document] = []
+    for entry in entries:
+        inner_external_id = f"{zip_external_id}::{entry.path}"
+        listed_inner_ids.add(inner_external_id)
+        synthetic_meta = {
+            "id": inner_external_id,
+            "name": f"{zip_name} / {entry.path}",
+            "mimeType": _mime_for_kind(entry.kind),
+            "webViewLink": file_meta.get("webViewLink"),
+            "modifiedTime": modified,
+            "permissions": file_meta.get("permissions") or [],
+            "content": entry.data.decode("utf-8", errors="replace")
+            if entry.kind == "text"
+            else None,
+            "_raw_bytes": entry.data,
+        }
+        doc = _upsert_drive_file(
+            db=db,
+            settings=settings,
+            storage=storage,
+            queue=queue,
+            drive=drive,
+            conn=conn,
+            file_meta=synthetic_meta,
+            visibility_default=visibility_default,
+            selected_user_ids=selected_user_ids,
+            uploaded_by=uploaded_by,
+        )
+        if doc is not None:
+            created.append(doc)
+
+    # A file dropped from a changed zip is handled the same way a file
+    # dropped from Google is handled: compare what's stored for this zip
+    # against what the zip currently lists, tombstone the difference.
+    live_inner = db.scalars(
+        select(Document).where(
+            Document.tenant_id == conn.tenant_id,
+            Document.connection_id == conn.id,
+            Document.source == "google_drive",
+            Document.deleted_at.is_(None),
+            Document.external_id.like(f"{zip_external_id}::%"),
+        )
+    ).all()
+    missing_inner = missing_external_ids(
+        (d.external_id for d in live_inner), listed_inner_ids
+    )
+    if missing_inner:
+        docs_to_hide = [d for d in live_inner if d.external_id in missing_inner]
+        tombstone_many(
+            db, search, docs_to_hide, reason=REASON_SOURCE_REMOVED,
+            log_operation="drive_sync",
+        )
+    return created
+
+
+def _mime_for_kind(kind: str) -> str:
+    return {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xls": "application/vnd.ms-excel",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppt": "application/vnd.ms-powerpoint",
+        "text": "text/plain",
+    }[kind]

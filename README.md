@@ -161,6 +161,67 @@ Required Domain-Wide Delegation scopes (in addition to Phase F's
 `admin.directory.user.readonly`):
 `admin.directory.group.readonly`, `admin.directory.group.member.readonly`.
 
+## Phase H — Continuous sync + deletion propagation
+
+Drive and Gmail connectors now sync on their own and stop serving content that
+was deleted.
+
+- **Automatic sync:** every 15 minutes (`AUTO_SYNC_INTERVAL_SECONDS`, default
+  900), on by default, admin switch on each connector card
+  (`PUT /v1/connections/{google_drive|gmail}/auto-sync`). Five failed syncs in a
+  row pause it with a visible reason. `AUTO_SYNC_ENABLED_GLOBAL=false` turns the
+  whole scheduler off. Sync Now still works. A queued/running sync job with no
+  progress for `AUTO_SYNC_STALE_AFTER_SECONDS` (default 3600) no longer blocks
+  the next automatic sync, so a crashed worker cannot stall a connector.
+- **Deletion:** a file removed from Drive (deleted, trashed, moved out, folder
+  un-selected) or a Gmail message deleted/trashed is hidden (record kept,
+  audited) and removed from search. If it returns, the next sync restores it.
+  Vridhi's own Delete button now removes the text from search too, and stays
+  deleted across syncs.
+- **Gmail** uses the History API: the first run does a full pass and saves a
+  checkpoint; later runs read only what changed. If the checkpoint expires it
+  falls back to a full pass. Only real Google can prove this part.
+- **Safety:** nothing is hidden unless the Drive listing completed; the Gmail
+  checkpoint only advances after a fully successful batch.
+
+```bash
+# mock mode, short schedule so the smoke doesn't wait 15 minutes
+AUTO_SYNC_INTERVAL_SECONDS=5 AUTO_SYNC_TICK_SECONDS=2 docker compose up -d worker
+API_URL=http://localhost:8000 ./scripts/smoke-phase-h.sh
+```
+
+The smoke needs `GOOGLE_DRIVE_MODE=mock` and `GMAIL_MODE=mock` on the api and
+worker (`docker-compose.yml` defaults both to `oauth`, so flip them locally
+first).
+
+## Phase I — Drive completeness (ZIPs, old Office formats, multi-tab Sheets, Shared Drives)
+
+Closes the biggest remaining Drive-connector gaps: a ZIP is expanded so each
+supported inner file is indexed and cited by its own name; legacy `.doc` /
+`.xls` / `.ppt` files are read via `catdoc`/`xls2csv`/`catppt`; every tab of a
+Google Sheet is indexed, not just the first; and Shared Drives (and their
+folders) are selectable and synced the same way My Drive folders are.
+
+- **ZIP:** one Document per supported inner file, external id
+  `"<zip_id>::<inner path>"`, cited by `"<zip name> / <inner path>"`. Removing
+  the whole ZIP or just one inner entry (a changed archive) hides exactly what
+  left, on the next sync — same tombstone path as any other removed file.
+- **Old Office formats:** `.doc`/`.xls`/`.ppt` are piped through
+  `catdoc`/`xls2csv`/`catppt` (installed in the worker image); a modern
+  `.docx`/`.xlsx`/`.pptx` is never misrouted to the legacy reader even if the
+  Drive-reported mime is stale.
+- **Multi-tab Sheets:** every worksheet is walked and indexed, not just the
+  first.
+- **Shared Drives:** listed and selectable alongside My Drive folders; files
+  in a Shared Drive sync exactly like a regular folder's files.
+- **Scope cut (accepted for this phase):** ZIP expansion has no enforced
+  size/entry/nesting limit — see ARCHITECTURE_NOTES.md.
+
+```bash
+docker compose up --build
+API_URL=http://localhost:8000 ./scripts/smoke-phase-i.sh
+```
+
 ## Smoke tests
 
 ```bash
@@ -171,4 +232,6 @@ API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-e.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-g.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-h.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-i.sh
 ```

@@ -91,6 +91,8 @@ def _connector_catalog(
                 "health": drive_detail.get("health"),
                 "account_email": drive_detail.get("account_email"),
                 "mode": drive_detail.get("mode"),
+                "auto_sync_enabled": drive_detail.get("auto_sync_enabled"),
+                "auto_sync_paused_reason": drive_detail.get("auto_sync_paused_reason"),
             }
         else:
             drive_status = "available"
@@ -113,6 +115,8 @@ def _connector_catalog(
                 "health": gmail_detail.get("health"),
                 "account_email": gmail_detail.get("account_email"),
                 "mode": gmail_detail.get("mode"),
+                "auto_sync_enabled": gmail_detail.get("auto_sync_enabled"),
+                "auto_sync_paused_reason": gmail_detail.get("auto_sync_paused_reason"),
             }
         else:
             gmail_status = "available"

@@ -17,8 +17,11 @@ an admin. Per-user mailboxes would require changing that constraint.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
@@ -37,7 +40,7 @@ from app.security import (
     generate_token,
     utcnow,
 )
-from app.services import google_oauth
+from app.services import autosync, google_oauth
 from app.services.queue import IngestQueue
 from app.services.storage import ObjectStorage
 from app.services.tokens import TokenStore
@@ -163,6 +166,41 @@ MOCK_MESSAGES: list[dict[str, Any]] = [
     },
 ]
 
+MOCK_HISTORY_ID = "1000"
+
+# Test-only side channel (mock mode only), same idea as the Drive one in
+# services/drive.py: scripts/smoke-phase-h.sh writes this file on the host and
+# both bind-mounted containers see it. Keys (all optional):
+#   removed_message_ids - messages that no longer exist (omitted from listings)
+#   history             - Gmail-shaped history records for get_mock_history
+#   history_id          - the mailbox's current historyId
+_MOCK_OVERRIDES_PATH = Path(
+    os.environ.get("GMAIL_MOCK_OVERRIDES_PATH")
+    or (Path(__file__).resolve().parents[2] / ".mock-gmail-overrides.json")
+)
+
+
+def _read_mock_overrides() -> dict[str, Any]:
+    try:
+        return json.loads(_MOCK_OVERRIDES_PATH.read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+
+
+def get_mock_messages() -> list[dict[str, Any]]:
+    removed = set(_read_mock_overrides().get("removed_message_ids") or [])
+    return [m for m in MOCK_MESSAGES if m["id"] not in removed]
+
+
+def get_mock_history(start_history_id: str) -> tuple[list[dict[str, Any]], str]:
+    """Mock ``users.history.list``: (records newer than the checkpoint, current historyId)."""
+    overrides = _read_mock_overrides()
+    current = str(overrides.get("history_id") or MOCK_HISTORY_ID)
+    records = [
+        r for r in (overrides.get("history") or []) if int(r["id"]) > int(start_history_id)
+    ]
+    return records, current
+
 
 class GmailService:
     def __init__(
@@ -216,6 +254,8 @@ class GmailService:
                 "document_count": 0,
                 "failed_document_count": 0,
                 "mode": self.settings.gmail_mode,
+                "auto_sync_enabled": None,
+                "auto_sync_paused_reason": None,
             }
         docs = int(
             self.db.scalar(
@@ -254,7 +294,15 @@ class GmailService:
             "failed_document_count": failed,
             "mode": self.settings.gmail_mode,
             "connection_id": conn.id,
+            "auto_sync_enabled": autosync.is_enabled(conn.config),
+            "auto_sync_paused_reason": autosync.paused_reason(conn.config),
         }
+
+    def set_auto_sync(self, *, tenant_id: UUID, user_id: UUID, enabled: bool) -> None:
+        conn = self.get_connection(tenant_id)
+        if not conn or conn.status == ConnectionStatus.disconnected:
+            raise AppError("GMAIL_NOT_CONNECTED", "Connect Gmail first.", 400)
+        autosync.set_auto_sync(self.db, conn, enabled=enabled, actor_user_id=user_id)
 
     # --- OAuth ---
 
@@ -384,6 +432,7 @@ class GmailService:
         user_id: UUID,
         query: Optional[str] = None,
         incremental: bool = True,
+        trigger: str = "manual",
     ) -> SyncJob:
         self.require_ready()
         conn = self.get_connection(tenant_id)
@@ -404,6 +453,7 @@ class GmailService:
             payload={
                 "query": query or self.settings.gmail_query,
                 "incremental": incremental,
+                "trigger": trigger,
                 "requested_by": str(user_id),
             },
         )

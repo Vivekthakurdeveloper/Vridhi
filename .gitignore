@@ -24,3 +24,5 @@ frontend/dist/
 # Runtime-only side channel scripts/smoke-phase-g.sh uses to mutate mock
 # Drive permissions between two sync calls; never read outside mock mode.
 apps/api/.mock-drive-overrides.json
+# Same idea for Gmail (scripts/smoke-phase-h.sh); mock mode only.
+apps/api/.mock-gmail-overrides.json

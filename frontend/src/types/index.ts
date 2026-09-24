@@ -80,6 +80,8 @@ export interface Connector {
   health: string | null
   account_email?: string | null
   mode?: string | null
+  auto_sync_enabled?: boolean | null
+  auto_sync_paused_reason?: string | null
 }
 
 export interface DashboardActivity {
@@ -132,10 +134,16 @@ export interface SyncJob {
   progress_failed?: number
   progress_skipped?: number
   error_message: string | null
+  trigger?: string | null
   started_at: string | null
   finished_at: string | null
   created_at: string
   updated_at: string
+}
+
+export interface AutoSyncState {
+  auto_sync_enabled?: boolean | null
+  auto_sync_paused_reason?: string | null
 }
 
 export interface DriveConnection {
@@ -152,10 +160,24 @@ export interface DriveConnection {
   connection_id: string | null
 }
 
+export interface GmailConnection extends AutoSyncState {
+  connected: boolean
+  status: string
+  health: string | null
+  account_email: string | null
+  last_sync_at: string | null
+  last_error: string | null
+  document_count: number
+  failed_document_count: number
+  mode: string
+  connection_id: string | null
+}
+
 export interface DriveFolder {
   id: string
   name: string
   path: string
+  drive_name?: string | null
 }
 
 export interface UploadResult {

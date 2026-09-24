@@ -9,6 +9,7 @@ import type {
   DocumentPreview,
   DriveConnection,
   DriveFolder,
+  GmailConnection,
   Invite,
   Member,
   MemberRole,
@@ -85,6 +86,12 @@ export const driveApi = {
       `/v1/connections/google_drive/failed-documents?limit=${limit}`,
     )
   },
+  setAutoSync(enabled: boolean) {
+    return apiRequest<DriveConnection>("/v1/connections/google_drive/auto-sync", {
+      method: "PUT",
+      body: { enabled },
+    })
+  },
 }
 
 export const gmailApi = {
@@ -98,6 +105,12 @@ export const gmailApi = {
         query: body.query,
         incremental: body.incremental ?? true,
       },
+    })
+  },
+  setAutoSync(enabled: boolean) {
+    return apiRequest<GmailConnection>("/v1/connections/gmail/auto-sync", {
+      method: "PUT",
+      body: { enabled },
     })
   },
 }

@@ -13,9 +13,13 @@ Two deliberate differences from Drive:
   equivalent consults `file_cursors` unconditionally, which makes
   `incremental: false` a no-op there; that bug is not reproduced here.
 
-Known limitation: `message_cursors` grows unbounded in `connections.config`
-JSONB, one key per synced attachment. Gmail's `historyId` API is the correct
-fix and is deferred to a later phase.
+Change tracking: `connection.config["gmail_history_id"]` is a Gmail History
+checkpoint. The first run does a full pass and stores it; later incremental
+runs read only what changed via `users.history.list` and hide attachments of
+deleted/trashed messages.
+
+Known limitation: `message_cursors` still grows unbounded in
+`connections.config` JSONB, one key per synced attachment.
 """
 
 from __future__ import annotations
@@ -40,10 +44,23 @@ from app.security import (
     SyncJobType,
     utcnow,
 )
-from app.services.gmail import MOCK_MESSAGES, GmailService
+from app.services import autosync
+from app.services.gmail import GmailService, get_mock_history, get_mock_messages
+from app.services.gmail_history import (
+    HistoryChanges,
+    interpret_history,
+    is_gone,
+    message_id_from_external_id,
+    partition_added,
+)
 from app.services.queue import IngestQueue, get_ingest_queue
 from app.services.storage import ObjectStorage, get_object_storage
 from app.services.tokens import TokenStore, get_token_store
+from app.services.tombstone import (
+    REASON_MANUAL,
+    REASON_SOURCE_REMOVED,
+    tombstone_many,
+)
 from worker.google_api import google_get_with_retry
 
 logger = logging.getLogger(__name__)
@@ -51,7 +68,7 @@ logger = logging.getLogger(__name__)
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 
-def process_gmail_sync_job(db: Session, *, job_id: UUID) -> None:
+def process_gmail_sync_job(db: Session, *, job_id: UUID, search: Any) -> None:
     """Worker entrypoint: uses API app services (storage/queue/tokens/settings)."""
     settings = get_settings()
     storage = get_object_storage()
@@ -63,6 +80,7 @@ def process_gmail_sync_job(db: Session, *, job_id: UUID) -> None:
         storage=storage,
         queue=queue,
         tokens=tokens,
+        search=search,
         job_id=job_id,
     )
 
@@ -74,6 +92,7 @@ def _run_gmail_sync(
     storage: ObjectStorage,
     queue: IngestQueue,
     tokens: TokenStore,
+    search: Any,
     job_id: UUID,
 ) -> None:
     job = db.get(SyncJob, job_id)
@@ -124,7 +143,32 @@ def _run_gmail_sync(
         if not requested_by:
             raise RuntimeError("Missing requested_by user")
 
-        messages = _list_messages(gmail, settings, conn, query)
+        checkpoint = str((conn.config or {}).get("gmail_history_id") or "")
+        changes: Optional[HistoryChanges] = None
+        new_checkpoint = ""
+        if incremental and checkpoint:
+            try:
+                records, new_checkpoint = _fetch_history(gmail, conn, checkpoint)
+                changes = interpret_history(records)
+            except HistoryExpired:
+                logger.info("gmail.history_expired", extra={"operation": "gmail_sync"})
+                changes = None
+        listed_message_ids: Optional[set[str]] = None
+        extra_removed: set[str] = set()
+        if changes is None:
+            # Full pass. Take the checkpoint BEFORE listing so any mail that
+            # arrives while we list is replayed by the next incremental run.
+            new_checkpoint = _current_history_id(gmail, conn)
+            messages = _list_messages(gmail, settings, conn, query)
+            listed_message_ids = {str(m["id"]) for m in messages}
+        else:
+            # History covers the whole mailbox and can misreport (e.g. a
+            # Spam -> Trash move reads as "added"), while messages.list (the
+            # full pass) leaves out Spam and Trash. So the fetched message is
+            # authoritative: gone or Spam/Trash-labelled ones are hidden, not
+            # ingested.
+            fetched = {mid: _fetch_message(gmail, conn, mid) for mid in changes.added}
+            messages, extra_removed = partition_added(changes.added, fetched)
 
         # progress_total counts attachments, not messages — it is what the UI
         # renders as "n of m", and a message may carry several attachments.
@@ -174,10 +218,43 @@ def _run_gmail_sync(
         if not job or not conn:
             raise RuntimeError("Gmail sync job or connection missing after attachment loop")
 
+        # Deletion propagation. Incremental runs know exactly which messages were
+        # deleted/trashed. A full pass lists every message matching the default
+        # query, so an unlisted stored message is gone (messages.list excludes
+        # Trash) - but only trust that when the query was not narrowed by hand.
+        deletions_ok = True
+        if changes is not None:
+            deletions_ok = _tombstone_gmail_messages(
+                db, search=search, conn=conn, message_ids=changes.removed | extra_removed
+            )
+        elif listed_message_ids is not None and query == settings.gmail_query:
+            deletions_ok = _tombstone_gmail_unlisted(
+                db,
+                search=search,
+                gmail=gmail,
+                conn=conn,
+                listed_message_ids=listed_message_ids,
+            )
+        job = db.get(SyncJob, job_id)
+        conn = db.get(Connection, job.connection_id) if job and job.connection_id else None
+        if not job or not conn:
+            raise RuntimeError("Gmail sync job or connection missing after deletion pass")
+
+        # Same reason as the per-attachment cursor write: pick up config/status
+        # changes made through the API during the run, and never resurrect a
+        # connection an admin disconnected mid-sync.
+        db.refresh(conn, ["config", "status"])
         job.status = SyncJobStatus.succeeded
         job.finished_at = utcnow()
+        if conn.status == ConnectionStatus.disconnected:
+            db.commit()
+            return
+
+        # One definition of a failed sync: it drives both the connection
+        # status/health and the auto-sync failure counter.
+        sync_ok = not (job.progress_failed and not (job.progress_done or job.progress_skipped))
         conn.status = ConnectionStatus.connected
-        if job.progress_failed and not job.progress_done:
+        if not sync_ok:
             conn.health = ConnectionHealth.error
             conn.status = ConnectionStatus.sync_failed
             conn.last_error = job.error_message
@@ -190,6 +267,19 @@ def _run_gmail_sync(
             conn.health = ConnectionHealth.healthy
             conn.last_error = None
         conn.last_sync_at = utcnow()
+        # Advance the checkpoint only when every attachment was handled AND every
+        # deletion was applied; otherwise the next run replays the same window
+        # (ready attachments are skipped by the existing per-attachment cursor,
+        # failed ones get retried, failed deletions are attempted again).
+        if new_checkpoint and not job.progress_failed and deletions_ok:
+            cfg = dict(conn.config or {})
+            cfg["gmail_history_id"] = new_checkpoint
+            conn.config = cfg
+        conn.config = autosync.record_sync_outcome(
+            conn.config,
+            succeeded=sync_ok,
+            max_failures=settings.auto_sync_max_consecutive_failures,
+        )
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -206,6 +296,17 @@ def _run_gmail_sync(
             conn.health = ConnectionHealth.error
             conn.last_error = str(exc)[:2000]
             conn.last_error_at = utcnow()
+            # A dead job is a failed sync. Under QUEUE_BACKEND=db a failed job is
+            # never retried (so never dead), so any failure counts there.
+            if job and (
+                job.status == SyncJobStatus.dead
+                or settings.queue_backend.lower().strip() == "db"
+            ):
+                conn.config = autosync.record_sync_outcome(
+                    conn.config,
+                    succeeded=False,
+                    max_failures=settings.auto_sync_max_consecutive_failures,
+                )
         db.commit()
         raise
 
@@ -246,7 +347,7 @@ def _list_messages(
     query: str,
 ) -> list[dict[str, Any]]:
     if gmail.is_mock:
-        return list(MOCK_MESSAGES)
+        return get_mock_messages()
 
     access = gmail.access_token(conn)
     headers = {"Authorization": f"Bearer {access}"}
@@ -275,6 +376,148 @@ def _list_messages(
         if not page_token:
             break
     return out
+
+
+class HistoryExpired(Exception):
+    """Gmail no longer has history for our checkpoint (HTTP 404)."""
+
+
+def _current_history_id(gmail: GmailService, conn: Connection) -> str:
+    if gmail.is_mock:
+        return get_mock_history("0")[1]
+    resp = google_get_with_retry(
+        f"{GMAIL_API_BASE}/profile",
+        params=None,
+        headers={"Authorization": f"Bearer {gmail.access_token(conn)}"},
+        timeout=30.0,
+    )
+    return str(resp.json().get("historyId") or "")
+
+
+def _fetch_history(
+    gmail: GmailService, conn: Connection, start_history_id: str
+) -> tuple[list[dict[str, Any]], str]:
+    """All history records since the checkpoint, plus the newest historyId."""
+    if gmail.is_mock:
+        return get_mock_history(start_history_id)
+
+    import httpx
+
+    headers = {"Authorization": f"Bearer {gmail.access_token(conn)}"}
+    records: list[dict[str, Any]] = []
+    latest = start_history_id
+    page_token: Optional[str] = None
+    while True:
+        params: dict[str, Any] = {
+            "startHistoryId": start_history_id,
+            "maxResults": 500,
+            "historyTypes": ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"],
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        try:
+            resp = google_get_with_retry(
+                f"{GMAIL_API_BASE}/history", params=params, headers=headers, timeout=30.0
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise HistoryExpired() from exc
+            raise
+        data = resp.json()
+        records.extend(data.get("history") or [])
+        if page_token is None:
+            # Only the first page's historyId is a safe checkpoint: later pages
+            # report a newer id that could skip changes if we stopped early.
+            latest = str(data.get("historyId") or latest)
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return records, latest
+
+
+def _fetch_message(
+    gmail: GmailService, conn: Connection, message_id: str
+) -> Optional[dict[str, Any]]:
+    if gmail.is_mock:
+        return next((m for m in get_mock_messages() if m["id"] == message_id), None)
+
+    import httpx
+
+    try:
+        resp = google_get_with_retry(
+            f"{GMAIL_API_BASE}/messages/{message_id}",
+            params={"format": "full"},
+            headers={"Authorization": f"Bearer {gmail.access_token(conn)}"},
+            timeout=30.0,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return None
+        raise
+    return resp.json()
+
+
+def _tombstone_gmail_messages(
+    db: Session, *, search: Any, conn: Connection, message_ids: set[str]
+) -> bool:
+    """Returns True only if every matching document was hidden."""
+    docs: list[Document] = []
+    for mid in sorted(message_ids):
+        docs.extend(
+            db.scalars(
+                select(Document).where(
+                    Document.tenant_id == conn.tenant_id,
+                    Document.source == "gmail",
+                    Document.connection_id == conn.id,
+                    Document.deleted_at.is_(None),
+                    Document.external_id.startswith(f"{mid}:", autoescape=True),
+                )
+            ).all()
+        )
+    done = tombstone_many(
+        db, search, docs, reason=REASON_SOURCE_REMOVED, log_operation="gmail_sync"
+    )
+    return done == len(docs)
+
+
+def _tombstone_gmail_unlisted(
+    db: Session,
+    *,
+    search: Any,
+    gmail: GmailService,
+    conn: Connection,
+    listed_message_ids: set[str],
+) -> bool:
+    """Hide stored documents whose message is confirmed gone.
+
+    Absence from today's listing is only a candidate signal: documents can also
+    come from a broader manual query or an older GMAIL_QUERY, so each candidate
+    message is looked up and only hidden when Gmail says it is deleted or in
+    Spam/Trash. Returns True only if every document that was gone got hidden.
+    """
+    live = db.scalars(
+        select(Document).where(
+            Document.tenant_id == conn.tenant_id,
+            Document.source == "gmail",
+            Document.connection_id == conn.id,
+            Document.deleted_at.is_(None),
+        )
+    ).all()
+    by_message: dict[str, list[Document]] = {}
+    for d in live:
+        if not d.external_id:
+            continue
+        mid = message_id_from_external_id(d.external_id)
+        if mid not in listed_message_ids:
+            by_message.setdefault(mid, []).append(d)
+    docs: list[Document] = []
+    for mid in sorted(by_message):
+        if is_gone(_fetch_message(gmail, conn, mid)):
+            docs.extend(by_message[mid])
+    done = tombstone_many(
+        db, search, docs, reason=REASON_SOURCE_REMOVED, log_operation="gmail_sync"
+    )
+    return done == len(docs)
 
 
 def _decode_base64url(data: str) -> bytes:
@@ -345,10 +588,17 @@ def _upsert_gmail_attachment(
             Document.tenant_id == conn.tenant_id,
             Document.source == "gmail",
             Document.external_id == external_id,
-            Document.deleted_at.is_(None),
         )
+        .order_by(Document.deleted_at.is_(None).desc(), Document.created_at.desc())
+        .limit(1)
         .options(selectinload(Document.grants))
     )
+    if existing is not None and existing.deleted_at is not None:
+        if existing.deleted_reason == REASON_MANUAL:
+            return None
+        existing.deleted_at = None
+        existing.deleted_reason = None
+        existing.status = DocumentStatus.pending
     prev_cursor = ((conn.config or {}).get("message_cursors") or {}).get(external_id)
     if (
         incremental
@@ -448,6 +698,10 @@ def _upsert_gmail_attachment(
     )
     ingest_job.sqs_message_id = msg_id
 
+    # The config we read before the (slow) download may be stale: the API can
+    # have changed it meanwhile (auto-sync switch, disconnect). Re-read right
+    # before the read-modify-write so we don't revert that.
+    db.refresh(conn, ["config"])
     cfg = dict(conn.config or {})
     cursors = dict(cfg.get("message_cursors") or {})
     cursors[external_id] = internal_date
