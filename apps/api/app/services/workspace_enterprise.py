@@ -18,8 +18,15 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.errors import AppError
+from app.models import User, WorkspaceEnterpriseConnection
+from app.security import WorkspaceEnterpriseStatus, utcnow
+from app.services.tokens import TokenStore, get_token_store
 
 logger = logging.getLogger(__name__)
 
@@ -185,16 +192,6 @@ def verify_directory_access(
         raise err from exc
 
 
-from uuid import UUID, uuid4
-
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.models import WorkspaceEnterpriseConnection
-from app.security import WorkspaceEnterpriseStatus, utcnow
-from app.services.tokens import TokenStore
-
-
 class WorkspaceEnterpriseService:
     def __init__(self, db: Session, tokens: TokenStore, *, is_mock: bool, scopes: list[str]):
         self.db = db
@@ -341,3 +338,39 @@ class WorkspaceEnterpriseService:
         conn.encrypted_key = ""
         conn.updated_at = utcnow()
         self.db.commit()
+
+
+def get_admin_impersonated_token(db: Session, tenant_id: UUID, scopes: list[str]) -> str:
+    """Return a working admin-level token for this tenant's Domain-Wide
+    Delegation connection, impersonating the admin who originally
+    verified it. This is the one place any consumer (Groups sync today,
+    future Chat/enterprise-Gmail sync) gets an admin-level token -- do
+    not duplicate impersonation logic elsewhere.
+    """
+    from app.config import get_settings
+
+    conn = db.scalar(
+        select(WorkspaceEnterpriseConnection).where(
+            WorkspaceEnterpriseConnection.tenant_id == tenant_id,
+            WorkspaceEnterpriseConnection.status == WorkspaceEnterpriseStatus.verified,
+        )
+    )
+    if not conn:
+        raise AppError(
+            "WORKSPACE_ENTERPRISE_NOT_CONFIGURED",
+            "This organization has no verified Google Workspace connection.",
+            400,
+        )
+    admin_email = db.scalar(select(User.email).where(User.id == conn.created_by_user_id))
+    if not admin_email:
+        raise AppError(
+            "WORKSPACE_ENTERPRISE_NOT_CONFIGURED",
+            "The admin who set up this connection no longer exists.",
+            400,
+        )
+
+    tokens = get_token_store()
+    key_dict = json.loads(tokens.decrypt(conn.encrypted_key))
+    return mint_impersonated_token(
+        key_dict, admin_email, scopes, mock=get_settings().workspace_enterprise_is_mock
+    )

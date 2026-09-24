@@ -16,11 +16,11 @@ from app.routers.documents import (
     delete_document_handler,
     get_document_handler,
     get_document_job_handler,
+    get_document_service,
     get_job_handler,
     list_documents_handler,
     preview_document_handler,
     upload_document,
-    get_document_service,
 )
 from app.schemas import (
     AuditEventOut,
@@ -281,7 +281,7 @@ async def upload_documents(
     ctx: Annotated[RequestContext, Depends(require_tenant)],
     svc: Annotated[DocumentService, Depends(get_document_service)],
     db: Annotated[Session, Depends(get_db)],
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI's required pattern for file uploads
     visibility: str = Form(default="private"),
     selected_user_ids: str = Form(default=""),
 ) -> UploadResponse:

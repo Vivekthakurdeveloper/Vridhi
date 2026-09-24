@@ -64,11 +64,16 @@ class OpenSearchRetriever:
         tenant_id: UUID,
         user_id: UUID,
         role: MemberRole,
+        user_group_ids: Optional[set[UUID]] = None,
     ) -> dict[str, Any]:
         must: list[dict[str, Any]] = [{"term": {"tenant_id": str(tenant_id)}}]
         if role_at_least(role, MemberRole.admin):
             return {"bool": {"must": must}}
         uid = str(user_id)
+        group_uids = [str(g) for g in (user_group_ids or set())]
+        selected_should: list[dict[str, Any]] = [{"term": {"granted_user_ids": uid}}]
+        if group_uids:
+            selected_should.append({"terms": {"granted_group_ids": group_uids}})
         acl = {
             "bool": {
                 "should": [
@@ -78,7 +83,7 @@ class OpenSearchRetriever:
                         "bool": {
                             "must": [
                                 {"term": {"visibility": "selected"}},
-                                {"term": {"granted_user_ids": uid}},
+                                {"bool": {"should": selected_should, "minimum_should_match": 1}},
                             ]
                         }
                     },
@@ -97,8 +102,9 @@ class OpenSearchRetriever:
         user_id: UUID,
         role: MemberRole,
         size: Optional[int] = None,
+        user_group_ids: Optional[set[UUID]] = None,
     ) -> list[RetrievedChunk]:
-        filt = self.acl_filter(tenant_id=tenant_id, user_id=user_id, role=role)
+        filt = self.acl_filter(tenant_id=tenant_id, user_id=user_id, role=role, user_group_ids=user_group_ids)
         bm25_size = self.settings.retrieval_bm25_size
         knn_size = self.settings.retrieval_knn_size
         rrf_k = self.settings.retrieval_rrf_k

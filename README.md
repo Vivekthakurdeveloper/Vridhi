@@ -133,6 +133,34 @@ API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
 
 Then set `WORKSPACE_ENTERPRISE_MODE=live`.
 
+## Phase G — Real Permissions + Google Groups
+
+Extends Phase F's Domain-Wide Delegation foundation to resolve real
+Google Groups and keep permissions correct even when they change
+without touching a file's content.
+
+- **Groups sync:** refreshes at most once per 15 minutes per tenant,
+  triggered at the start of every Drive sync
+- **Group-based sharing:** a Drive file shared with a Google Group is
+  now visible to that group's current members, not just individually
+  named people
+- **Permissions never go stale from a skipped file:** Drive sync now
+  re-checks and updates permissions for every previously-synced file on
+  every run, even when its content is unchanged and skipped for
+  re-ingestion — closing the biggest gap in the original Drive
+  integration (revocations were previously silently missed)
+- **Fail-closed throughout:** any Groups API failure, or a document
+  referencing an unrecognized group, grants nothing extra
+
+```bash
+docker compose up --build
+API_URL=http://localhost:8000 ./scripts/smoke-phase-g.sh
+```
+
+Required Domain-Wide Delegation scopes (in addition to Phase F's
+`admin.directory.user.readonly`):
+`admin.directory.group.readonly`, `admin.directory.group.member.readonly`.
+
 ## Smoke tests
 
 ```bash
@@ -142,4 +170,5 @@ API_URL=http://localhost:8000 ./scripts/smoke-phase-c.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-d.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-e.sh
 API_URL=http://localhost:8000 ./scripts/smoke-phase-f.sh
+API_URL=http://localhost:8000 ./scripts/smoke-phase-g.sh
 ```

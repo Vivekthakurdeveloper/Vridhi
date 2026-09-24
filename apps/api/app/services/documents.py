@@ -17,7 +17,9 @@ from app.models import (
     Connection,
     Document,
     DocumentGrant,
+    DocumentGroupGrant,
     DocumentVersion,
+    GroupMembership,
     OrganizationMember,
     SyncJob,
 )
@@ -123,6 +125,8 @@ class DocumentService:
         user_id: UUID,
         role: MemberRole,
         grant_user_ids: Optional[set[UUID]] = None,
+        grant_group_ids: Optional[set[UUID]] = None,
+        user_group_ids: Optional[set[UUID]] = None,
     ) -> bool:
         if doc.status == DocumentStatus.deleted or doc.deleted_at is not None:
             return False
@@ -135,15 +139,31 @@ class DocumentService:
         if doc.visibility == DocumentVisibility.private:
             return False
         if doc.visibility == DocumentVisibility.selected:
-            if grant_user_ids is not None:
-                return user_id in grant_user_ids
+            if grant_user_ids is not None and user_id in grant_user_ids:
+                return True
+            if grant_group_ids is not None and user_group_ids is not None:
+                if grant_group_ids & user_group_ids:
+                    return True
+                if grant_user_ids is not None:
+                    return False  # both precomputed sets provided and neither matched
             granted = self.db.scalar(
                 select(DocumentGrant.id).where(
                     DocumentGrant.document_id == doc.id,
                     DocumentGrant.user_id == user_id,
                 )
             )
-            return granted is not None
+            if granted is not None:
+                return True
+            from app.services.groups import user_group_ids as fetch_user_group_ids
+
+            uids = fetch_user_group_ids(self.db, user_id)
+            group_granted = self.db.scalar(
+                select(DocumentGroupGrant.id).where(
+                    DocumentGroupGrant.document_id == doc.id,
+                    DocumentGroupGrant.group_id.in_(uids) if uids else False,
+                )
+            )
+            return group_granted is not None
         return False
 
     def accessible_filter(self, tenant_id: UUID, user_id: UUID, role: MemberRole):
@@ -160,12 +180,23 @@ class DocumentService:
                 DocumentGrant.user_id == user_id,
             )
         )
+        group_grant_exists = exists(
+            select(DocumentGroupGrant.id)
+            .join(GroupMembership, GroupMembership.group_id == DocumentGroupGrant.group_id)
+            .where(
+                DocumentGroupGrant.document_id == Document.id,
+                GroupMembership.user_id == user_id,
+            )
+        )
         return and_(
             base,
             or_(
                 Document.uploaded_by_user_id == user_id,
                 Document.visibility == DocumentVisibility.org,
-                and_(Document.visibility == DocumentVisibility.selected, grant_exists),
+                and_(
+                    Document.visibility == DocumentVisibility.selected,
+                    or_(grant_exists, group_grant_exists),
+                ),
             ),
         )
 

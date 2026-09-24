@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -17,6 +20,7 @@ from app.models import (
     Connection,
     ConnectionCredential,
     Document,
+    Group,
     OrganizationMember,
     SyncJob,
     User,
@@ -91,9 +95,76 @@ MOCK_FILES = {
                 "GST invoice must be issued within 7 days of payment receipt.\n"
                 "Professional plan is priced at INR 24,999 per month billed annually.\n"
             ),
-        }
+        },
+        {
+            "id": "file-finance-group-shared",
+            "name": "Finance Group Shared Report.txt",
+            "mimeType": "text/plain",
+            "webViewLink": "https://drive.google.com/file/d/file-finance-group-shared/view",
+            "modifiedTime": "2025-02-01T09:00:00Z",
+            # Shared with the "finance@acme.com" Google Group (see
+            # services/groups.py MOCK_GROUPS) rather than an individual user or
+            # the whole domain. This is the fixture the Phase G smoke test
+            # (scripts/smoke-phase-g.sh) uses to prove group-based access: a
+            # group member should see this file once Groups sync resolves the
+            # membership, and lose access again once this permission is
+            # revoked and Drive re-syncs -- even though the file content and
+            # modifiedTime never change. See get_mock_files() below for how
+            # the smoke test mutates this between two sync calls.
+            "permissions": [
+                {"type": "user", "emailAddress": "owner@example.com", "role": "owner"},
+                {"type": "group", "emailAddress": "finance@acme.com", "role": "reader"},
+            ],
+            "content": (
+                "Finance Group Shared Report.\n"
+                "Visible to the Finance Google Group only.\n"
+            ),
+        },
     ],
 }
+
+
+# --- Test-only mock permission overrides ------------------------------------
+#
+# The Phase G smoke test needs to mutate a mock file's Drive `permissions`
+# between two sync calls in the same run (e.g. revoke a group share, then
+# re-sync) to prove worker/drive_sync.py's fail-closed re-resolution path
+# actually revokes access. The api and worker run as separate processes
+# (separate containers in docker-compose), so an in-memory mutation from one
+# wouldn't be visible to the other -- but docker-compose bind-mounts this same
+# `apps/api` source tree into both, so a small JSON file living next to this
+# module is a cheap, host-writable side channel between an external test
+# script and both processes, without a real API endpoint or IPC mechanism.
+#
+# This is consulted ONLY by get_mock_files(), which is itself only ever
+# called from the mock-mode fixture branch in
+# worker/drive_sync.py::_list_files_for_folders (already gated on
+# `settings.google_drive_mode == "mock"`). It has no effect on, and is never
+# read from, the real Google Drive API code path. If the file is absent (the
+# default for anyone not running this smoke test), MOCK_FILES is served
+# as-is.
+_MOCK_OVERRIDES_PATH = Path(
+    os.environ.get("DRIVE_MOCK_OVERRIDES_PATH")
+    or (Path(__file__).resolve().parents[2] / ".mock-drive-overrides.json")
+)
+
+
+def get_mock_files(folder_id: str) -> list[dict[str, Any]]:
+    """Mock-mode file listing for `folder_id`, with any test-only permission
+    overrides from `_MOCK_OVERRIDES_PATH` applied on top of MOCK_FILES."""
+    files = [dict(f) for f in MOCK_FILES.get(folder_id) or []]
+    overrides = _read_mock_overrides().get("permissions") or {}
+    for f in files:
+        if f["id"] in overrides:
+            f["permissions"] = overrides[f["id"]]
+    return files
+
+
+def _read_mock_overrides() -> dict[str, Any]:
+    try:
+        return json.loads(_MOCK_OVERRIDES_PATH.read_text())
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
 
 
 @dataclass
@@ -444,7 +515,18 @@ class DriveService:
             },
         )
         self.db.add(job)
-        self.db.flush()
+        # Commit (making the job row durably visible to other DB sessions)
+        # BEFORE publishing to the queue. Publishing first and committing
+        # after is a classic race: the worker runs in a separate process
+        # with its own DB session/connection, and a fast worker can receive
+        # and look up the job before this transaction lands, find nothing,
+        # and silently ack the message -- leaving the job stuck at "queued"
+        # forever with no error anywhere. This was observed directly against
+        # the mock stack (worker consumed and deleted the SQS message inside
+        # single-digit milliseconds of it being sent, well before this
+        # session's commit had a chance to complete).
+        self.db.commit()
+        self.db.refresh(job)
         try:
             message_id = self.queue.enqueue_job(
                 job_id=job.id,
@@ -454,6 +536,7 @@ class DriveService:
                 version_id=None,
             )
             job.sqs_message_id = message_id
+            self.db.commit()
         except Exception as exc:
             job.status = SyncJobStatus.failed
             job.error_message = str(exc)
@@ -464,7 +547,6 @@ class DriveService:
             self.db.commit()
             raise AppError("QUEUE_ERROR", "Could not queue Drive sync.", 503) from exc
 
-        self.db.commit()
         self.db.refresh(job)
         return job
 
@@ -552,35 +634,40 @@ class DriveService:
         permissions: list[dict[str, Any]],
         default_visibility: DocumentVisibility,
         selected_user_ids: list[UUID],
-    ) -> tuple[DocumentVisibility, list[UUID]]:
+    ) -> tuple[DocumentVisibility, list[UUID], list[UUID]]:
         """
         Conservative fail-closed mapping:
-        - domain/anyone/org-wide Drive share → org (only if default allows org)
-        - user shares → selected grants for matched active members only
-        - unmatched emails are skipped (never widen access)
-        - if no mappable grants and not domain → private
+        - domain/anyone/org-wide Drive share -> org (only if default allows org)
+        - user shares -> selected grants for matched active members only
+        - group shares -> selected grants for the matched local Group (if known)
+        - unmatched emails/groups are skipped (never widen access)
+        - if no mappable grants and not domain -> private
+
+        Returns (visibility, user_grant_ids, group_grant_ids).
         """
         if default_visibility == DocumentVisibility.private:
-            return DocumentVisibility.private, []
+            return DocumentVisibility.private, [], []
         if default_visibility == DocumentVisibility.selected:
-            return DocumentVisibility.selected, selected_user_ids
+            return DocumentVisibility.selected, selected_user_ids, []
 
-        # default org — still fail-closed if Drive file is only shared to specific users
+        # default org -- still fail-closed if Drive file is only shared to specific users/groups
         has_domain = any(
             p.get("type") in {"domain", "anyone"} and p.get("role") in {"reader", "commenter", "writer", "owner"}
             for p in permissions
         )
         if has_domain:
-            return DocumentVisibility.org, []
+            return DocumentVisibility.org, [], []
 
         emails = [
             str(p.get("emailAddress") or "").lower()
             for p in permissions
             if p.get("type") == "user" and p.get("emailAddress")
         ]
-        if not emails:
-            # No discoverable sharing metadata → keep private
-            return DocumentVisibility.private, []
+        group_emails = [
+            str(p.get("emailAddress") or "").lower()
+            for p in permissions
+            if p.get("type") == "group" and p.get("emailAddress")
+        ]
 
         user_ids = list(
             self.db.execute(
@@ -594,10 +681,23 @@ class DriveService:
             )
             .scalars()
             .all()
-        )
-        if not user_ids:
-            return DocumentVisibility.private, []
-        return DocumentVisibility.selected, user_ids
+        ) if emails else []
+
+        group_ids = list(
+            self.db.execute(
+                select(Group.id).where(
+                    Group.tenant_id == tenant_id,
+                    func.lower(Group.email).in_(group_emails),
+                )
+            )
+            .scalars()
+            .all()
+        ) if group_emails else []
+
+        if not user_ids and not group_ids:
+            # No discoverable/resolvable sharing metadata -> keep private
+            return DocumentVisibility.private, [], []
+        return DocumentVisibility.selected, user_ids, group_ids
 
 
 def new_oauth_state() -> str:

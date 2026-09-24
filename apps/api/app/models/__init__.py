@@ -4,7 +4,18 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -371,6 +382,9 @@ class WorkspaceEnterpriseConnection(Base):
     verified_scopes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    groups_last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -379,6 +393,84 @@ class WorkspaceEnterpriseConnection(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class Group(Base):
+    """A Google Group, synced from the Admin Directory API via the
+    tenant's Domain-Wide Delegation connection."""
+
+    __tablename__ = "groups"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "google_group_id", name="groups_tenant_google_id_uidx"),
+        Index("groups_tenant_idx", "tenant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    google_group_id: Mapped[str] = mapped_column(Text, nullable=False)
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class GroupMembership(Base):
+    """One row per (group, Vridhi user) membership fact. Unmatched/external
+    member emails never get a row here -- same fail-closed convention as
+    Drive's existing named-user sharing resolution."""
+
+    __tablename__ = "group_memberships"
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="group_memberships_group_user_uidx"),
+        Index("group_memberships_tenant_idx", "tenant_id"),
+        Index("group_memberships_user_idx", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DocumentGroupGrant(Base):
+    """Explicit group grants for a document -- mirrors DocumentGrant
+    (per-user) exactly, but for groups. Fail-closed otherwise."""
+
+    __tablename__ = "document_group_grants"
+    __table_args__ = (
+        UniqueConstraint("document_id", "group_id", name="document_group_grants_doc_group_uidx"),
+        Index("document_group_grants_tenant_idx", "tenant_id"),
+        Index("document_group_grants_group_idx", "group_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("groups.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 
@@ -424,6 +516,9 @@ class Document(Base):
 
     versions: Mapped[list["DocumentVersion"]] = relationship(back_populates="document")
     grants: Mapped[list["DocumentGrant"]] = relationship(back_populates="document")
+    group_grants: Mapped[list["DocumentGroupGrant"]] = relationship(
+        "DocumentGroupGrant", cascade="all, delete-orphan"
+    )
 
 
 class DocumentGrant(Base):
