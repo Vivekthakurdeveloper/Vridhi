@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Sequence, Union
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0007_groups_permissions"
 down_revision: Union[str, None] = "0006_workspace_enterprise"
