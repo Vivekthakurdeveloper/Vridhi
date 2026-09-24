@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Annotated, AsyncIterator, Optional
+from typing import Annotated, AsyncIterator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends

@@ -17,7 +17,7 @@ from app.deps import (
     require_tenant,
 )
 from app.errors import AppError
-from app.models import OrganizationMember, User
+from app.models import Invite, OrganizationMember, User
 from app.models import Session as DbSession
 from app.schemas import (
     AcceptInviteRequest,
@@ -39,7 +39,6 @@ from app.schemas import (
 )
 from app.security import MemberRole, generate_token
 from app.services.auth import AuthService, MembershipContext, OrgService
-from app.models import Invite
 
 router = APIRouter()
 

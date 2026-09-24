@@ -20,7 +20,13 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Group, GroupMembership, OrganizationMember, User, WorkspaceEnterpriseConnection
+from app.models import (
+    Group,
+    GroupMembership,
+    OrganizationMember,
+    User,
+    WorkspaceEnterpriseConnection,
+)
 from app.security import MemberStatus, WorkspaceEnterpriseStatus, utcnow
 from app.services.workspace_enterprise import get_admin_impersonated_token
 
