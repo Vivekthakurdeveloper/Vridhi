@@ -1,7 +1,6 @@
 import json
 
 from app.services.chat import (
-    _MOCK_OVERRIDES_PATH,
     get_mock_members,
     get_mock_messages,
     get_mock_spaces,

@@ -4,7 +4,7 @@ import base64
 import hashlib
 import logging
 from functools import lru_cache
-from typing import Optional, Protocol
+from typing import Protocol
 
 from cryptography.fernet import Fernet, InvalidToken
 

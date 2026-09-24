@@ -18,8 +18,15 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.errors import AppError
+from app.models import User, WorkspaceEnterpriseConnection
+from app.security import WorkspaceEnterpriseStatus, utcnow
+from app.services.tokens import TokenStore, get_token_store
 
 logger = logging.getLogger(__name__)
 
@@ -183,16 +190,6 @@ def verify_directory_access(
         err = AppError("WORKSPACE_ENTERPRISE_VERIFICATION_FAILED", friendly, 400)
         err.raw_detail = raw
         raise err from exc
-
-
-from uuid import UUID, uuid4
-
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.models import User, WorkspaceEnterpriseConnection
-from app.security import WorkspaceEnterpriseStatus, utcnow
-from app.services.tokens import TokenStore, get_token_store
 
 
 class WorkspaceEnterpriseService:
